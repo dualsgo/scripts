@@ -1,0 +1,57 @@
+<div id="billingCheckingList" class="cards-selection-list collapse">
+  <div class="cta-area clearfix">
+    <button class="btn btn-primary pull-right" ng-click="billingFulfillments(fulfillmentBillingCheckingList)" ng-disabled="!hasSelectedItemsBillingChecking || !fulfillmentBillingCheckingList" disabled="disabled">
+      <span class="glyphicon glyphicon-usd"></span> Faturar
+    </button>
+  </div>
+  
+  <grid-fulfillments-billing-checking-list config="gridBillingCheckingComponentConfig" data="fulfillmentBillingCheckingList" class="ng-isolate-scope">
+    
+    <!-- Filtros de Status (Muito importante para os travamentos do SEFAZ) -->
+    <select id="order-filter-status-billed" ng-model="$ctrl.filterStatusBilled">
+      <option value="*">Todos os status</option>
+      <option value="checked">Conferido</option>
+      <option value="REGISTERED_SALE">Venda Registrada</option>
+      <option value="INVOICING">Aguardando Emissão Fiscal</option>
+      <option value="INVOICING_FAIL">Falha no registro do Emissor Fiscal</option>
+      <option value="TAXING">Aguardando GNRE</option>
+      <option value="BILLING">Aguardando orçamento</option>
+    </select>
+
+    <!-- Tabela de Faturamento -->
+    <table class="table table-bordered table-striped billing-checking-fulfillments">
+      <tbody>
+        <tr ng-repeat="item in $ctrl._gen.data.list">
+          
+          <!-- Checkbox de Seleção -->
+          <td class="table-column-checkbox">
+            <input type="checkbox" ng-model="fulfillment.isSelected" ng-click="$ctrl.selectItem(fulfillment)">
+          </td>
+          
+          <!-- ID e Descrição -->
+          <td>
+            <div class="table-order-id"><span>v35944745rihp-01</span></div>
+          </td>
+          
+          <!-- Status -->
+          <td>
+            <span class="order-status billing">Aguardando orçamento</span>
+          </td>
+          
+          <!-- Botões de Ação Específicos para Faturamento / Erro -->
+          <td class="grid-buttons">
+            <!-- Botão 1: Solicitar Emissão (Tentar Novamente) -->
+            <button ng-click="$ctrl.callAction(button.name, fulfillment)" uib-tooltip="Solicitar Emissão do Orçamento">
+              <span class="glyphicon glyphicon-usd"></span>
+            </button>
+            
+            <!-- Botão 2: Reenviar para Faturamento (Retentativa Sefaz) -->
+            <button ng-click="$ctrl.callAction(button.name, fulfillment)" uib-tooltip="Reenviar para Faturamento">
+              <span class="glyphicon glyphicon-refresh"></span>
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </grid-fulfillments-billing-checking-list>
+</div>

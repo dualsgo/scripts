@@ -1,0 +1,51 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura da aba Detalhes do Pedido
+  logo após o preenchimento do Modal de "Preparar Entrega".
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body>
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container order-content ng-scope" ng-controller="fulfillmentViewController">
+      
+      <!-- Status e Título -->
+      <div class="fulfillment-status-billed">
+        <div class="page-header">
+          <h1>Detalhes da entrega</h1>
+          <div class="clearfix">
+            <div class="pull-left fulfillment-details-title">
+              <span>N⁰:</span>
+              <h2 class="ng-binding">v35944745rihp-01</h2>
+              <!-- STATUS NOVO: Pronto para envio -->
+              <span class="order-status ng-binding send_ready">Pronto para envio</span>
+            </div>
+            
+            <!-- Botões de Impressão agora ficam no Dropdown de Outras Ações -->
+            <div class="pull-right fulfillment-buttons-control ng-scope">
+              <div class="dropdown ng-scope">
+                <div class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
+                  Outras ações
+                </div>
+                <ul class="dropdown-menu">
+                  <li class="ng-scope">
+                    <a ng-click="actionManager.showCustomTemplate('shipmentTag', fulfillment || null)">
+                      <span class="glyphicon glyphicon-print"></span> Etiqueta de despacho
+                    </a>
+                  </li>
+                  <li class="ng-scope">
+                    <a ng-click="actionManager.showInvoicePdf(fulfillment || null)">
+                      <span class="glyphicon glyphicon-file"></span> Nota fiscal
+                    </a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

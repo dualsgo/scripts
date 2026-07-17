@@ -1,0 +1,97 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura inicial fornecida. 
+  Algumas partes do rodapé/modais foram omitidas, mas a estrutura principal e o cabeçalho estão completos.
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body>
+  <!-- uiView: header -->
+  <div ui-view="header" class="ng-scope">
+    <nav id="header" class="navbar navbar-default navbar-fixed-top ng-scope">
+      <!-- Nav Menu -->
+    </nav>
+  </div>
+
+  <!-- uiView: main -->
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container ng-scope" ng-controller="indexController">
+      <h1 class="welcome-title text-center">Fluxo de entregas</h1>
+      
+      <!-- Fulfillments Flow -->
+      <div class="fulfillments-flow row">
+        
+        <!-- PENDENTES -->
+        <div class="pending step-box clearfix" ng-click="go('/fulfillments')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('waiting')" -->
+        </div>
+
+        <!-- SEPARAÇÃO -->
+        <div class="picking step-box clearfix" ng-click="main.goToSelectionList('pickingList')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('pickingOnly')" -->
+        </div>
+
+        <!-- FATURAMENTO -->
+        <div class="billing step-box clearfix" ng-click="main.goToSelectionList('billingCheckingList')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('billingChecking')" -->
+        </div>
+
+        <!-- PREPARAR ENTREGA -->
+        <div class="preparing step-box clearfix" ng-click="main.goToSelectionList('billedList')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('billed')" -->
+        </div>
+
+        <!-- LISTA DE DESPACHO -->
+        <div class="shipping step-box clearfix" ng-click="go('/fulfillments/shipping')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('sendReady')" -->
+        </div>
+
+        <!-- RECEBIMENTO -->
+        <div class="packing-list step-box clearfix" ng-click="go('/fulfillments/transfer')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('waitingTransfer')" -->
+        </div>
+
+        <!-- LISTA DE ROMANEIO -->
+        <div class="packing-list step-box clearfix" ng-click="go('/packing-lists')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('packingList')" -->
+        </div>
+
+        <!-- LISTA DE RETIRADA -->
+        <div class="pickup step-box clearfix" ng-click="go('/fulfillments/pickup')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('pickupReady')" -->
+        </div>
+
+        <!-- DESPACHADAS -->
+        <div class="delivered step-box clearfix" ng-click="go('/fulfillments/shipped')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('shipped')" -->
+        </div>
+
+        <!-- FINALIZADAS -->
+        <div class="delivered step-box clearfix" ng-click="go('/fulfillments/delivered')">
+           <!-- finalizadas ... -->
+        </div>
+
+      </div>
+
+      <div class="fulfillments-misc row">
+        <!-- TRATAMENTO -->
+        <div class="receive step-box clearfix" ng-click="go('/fulfillments/treatment')">
+           <!-- ng-controller="indexBoxStatusController" ng-init="start('treatmentList')" -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- uiView: footer -->
+  <div ui-view="footer" class="ng-scope"></div>
+
+  <!-- uiView: modals -->
+  <div ui-view="quick-search-response-list" class="ng-scope"></div>
+  <div ui-view="quick-search" class="ng-scope"></div>
+  <div ui-view="modal-alert" class="ng-scope"></div>
+  <div ui-view="modal-notification" class="ng-scope"></div>
+  <div ui-view="modal-prompt" class="ng-scope"></div>
+  <div ui-view="modal-pickup-document" class="ng-scope"></div>
+</body>
+</html>

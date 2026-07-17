@@ -1,0 +1,58 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura inicial da aba Detalhes do Pedido (Aguardando orçamento / Billing).
+  Representa o momento em que o pedido foi enviado para o faturamento (SEFAZ) e aguarda aprovação.
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body>
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container order-content ng-scope" ng-controller="fulfillmentViewController">
+      
+      <!-- Status e Título -->
+      <div class="fulfillment-status-billing">
+        <div class="page-header">
+          <h1>Detalhes da entrega</h1>
+          <div class="clearfix">
+            <div class="pull-left fulfillment-details-title">
+              <span>N⁰:</span>
+              <h2 class="ng-binding">v35944745rihp-01</h2>
+              <!-- STATUS AGORA É 'AGUARDANDO ORÇAMENTO / BILLING' -->
+              <span class="order-status ng-binding billing">Aguardando orçamento</span>
+            </div>
+            
+            <!-- Botões de Ação na Conferência ficam ocultos enquanto processa -->
+            <div class="pull-right fulfillment-buttons-control ng-scope">
+              <fulfillment-details-buttons class="ng-isolate-scope">
+                <div>
+                  <!-- Neste estado, não há botões ativos para o operador. A Linx está se comunicando com o SEFAZ. -->
+                </div>
+              </fulfillment-details-buttons>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tabela de Produtos -->
+        <div ui-view="order-products-table" class="ng-scope">
+          <!-- A tabela permanece visível, com os produtos conferidos -->
+        </div>
+
+        <!-- TIMELINE ATUALIZADA -->
+        <div class="order-history-timeline">
+            <!-- ... etapas anteriores ... -->
+            <div class="order-history-step text-center ng-scope">
+                <p class="lead ng-binding">07/07/2026 <br>00:10</p>
+                <div class="order-history-status ng-binding">Conferido</div>
+            </div>
+            <div class="order-history-step text-center ng-scope">
+                <p class="lead ng-binding">07/07/2026 <br>00:11</p>
+                <div class="order-history-status ng-binding">Aguardando orçamento</div>
+            </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</body>
+</html>

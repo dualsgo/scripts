@@ -1,0 +1,93 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura inicial da aba Pendentes.
+  Algumas partes foram truncadas por serem repetitivas (linhas da tabela).
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body>
+  <!-- uiView: main -->
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container ng-scope">
+      <div class="page-header ng-scope" id="accordions" ng-controller="fulfillmentsController">
+        
+        <div class="orders-step is-pre-reservation ng-scope">
+          <div class="header-step">
+            <h1 class="ng-binding">Lista de Entregas <span class="fulfillment-qty">(4)</span></h1>
+            
+            <div class="button-with-badge pull-right">
+              <div class="btn-group btn-new-separation">
+                <button id="defaultPrintSeparation" type="button" class="btn btn-primary btn-separation" ng-click="pickFulfillment(fulfillments)">
+                  Separar
+                </button>
+                <button id="dLabel" type="button" class="btn btn-primary dropdown-toggle" data-toggle="dropdown">
+                  <span class="caret"></span>
+                </button>
+                <ul class="dropdown-menu">
+                  <li><a id="separateByOrder" ng-click="newPickingTag(fulfillments, 'fulfillment')">Agrupado por pedido</a></li>
+                  <li><a id="separateBySku" ng-click="newPickingTag(fulfillments, 'sku')">Agrupado por sku</a></li>
+                  <li><a id="separateByCategory" ng-click="newPickingTag(fulfillments, 'category')">Agrupado por categoria</a></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Botão de novas ordens (Refresh) -->
+          <button type="button" class="btn btn-default btn-block load-new-orders ng-hide" ng-click="$ctrl.notification.updateList()">
+            <span class="glyphicon glyphicon-bell"></span> <strong>0 atualizações</strong>
+          </button>
+
+          <!-- Tabela de Fulfillments (Pendentes) -->
+          <table class="table table-bordered table-striped waiting-fulfillments">
+            <thead>
+              <tr>
+                <th class="table-column-checkbox"><input type="checkbox" id="selectedAll"></th>
+                <th>expira em</th>
+                <th>Prazo de Entrega</th>
+                <th>compra</th>
+                <th class="description-column">descrição</th>
+                <th>tipo</th>
+                <th>status</th>
+                <th>Transportadora</th>
+                <th class="table-column-buttons"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Loop dos pedidos pendentes -->
+              <tr ng-repeat="item in $ctrl._gen.data.list" class="ng-scope">
+                <td class="table-column-checkbox">
+                  <input type="checkbox" ng-model="fulfillment.isSelected">
+                </td>
+                <td ng-class="{'expiring-fulfillment': fulfillment.getIsExpiring(), 'expired-fulfillment': fulfillment.getIsExpired()}">
+                  <span class="glyphicon glyphicon-exclamation-sign"></span> 07/07/26 22:00
+                </td>
+                <td>08/07/2026</td>
+                <td>06/07/26 22:11</td>
+                <td>
+                  <div class="table-order-id">
+                    <span class="ng-binding">v35944613rihp-01</span>
+                  </div>
+                  <!-- Detalhes do produto ... -->
+                </td>
+                <td><span class="shipping-type">Retirada em loja</span></td>
+                <td><span class="order-status waiting">Pendente</span></td>
+                <td><!-- Transportadora --></td>
+                <td class="grid-buttons">
+                  <button class="btn btn-default btn-sm" uib-tooltip="Visualizar Entrega">
+                    <span class="glyphicon glyphicon-eye-open"></span>
+                  </button>
+                  <button class="btn btn-default btn-sm" uib-tooltip="Separar Entrega" ng-click="$ctrl.callAction(button.name, fulfillment)">
+                    <span class="glyphicon glyphicon-ok"></span>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

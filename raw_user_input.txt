@@ -1,0 +1,69 @@
+<USER_REQUEST>
+agora finciona mas esta diferente 
+
+// ==UserScript==
+// @name         Super Monitor Linx OMS - Versão Alerta TV Premium
+// @namespace    http://tampermonkey.net/
+// @version      7.00
+// @description  Monitor de pedidos OMS otimizado para TV: Painel em tela cheia com letras gigantes, atualizações em tempo real das pendências, alarmes insistentes automáticos e visualização operacional 100% hands-free.
+// @author       Antigravity AI
+// @match        https://*.linxoms.com.br/*
+// @match        https://gestordepedidos.ifood.com.br/*
+// @match        https://merchant.ifood.com.br/*
+// @match        https://separador.ifood.com.br/*
+// @connect      linxoms.com.br
+// @grant        GM_setValue
+// @grant        GM_getValue
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    function initScriptCore() {
+        // --- INTEGRAÇÃO DIRETA COM PORTAL IFOOD ---
+        if (window.location.hostname.includes('ifood.com.br')) {
+            setInterval(() => {
+                let newOrdersCount = 0;
+                const outputByAria = document.querySelector('output[aria-label*="pedidos"]');
+                if (outputByAria && outputByAria.textContent) {
+                    const val = parseInt(outputByAria.textContent.trim(), 10);
+                    if (!isNaN(val)) newOrdersCount = val;
+                } else {
+                    const pElements = Array.from(document.querySelectorAll('p'));
+                    const pedidosP = pElements.find(p => p.textContent.trim().toLowerCase() === 'pedidos');
+                    if (pedidosP && pedidosP.parentElement) {
+                        const outputEl = pedidosP.parentElement.querySelector('output');
+                        if (outputEl && outputEl.textContent) {
+                            const val = parseInt(outputEl.textContent.trim(), 10);
+                            if (!isNaN(val)) newOrdersCount = val;
+                        }
+                    }
+                }
+                GM_setValue('ifoodPendingOrders', newOrdersCount);
+            
+<truncated 45215 bytes>
+dius:30px; letter-spacing:1px; animation: heartbeat 1s infinite;">🚨 AÇÃO IMEDIATA REQUERIDA</div>`;
+            } else {
+                statusBadgeHtml = `<div style="background:var(--neon-green); color:#000; font-size:16px; font-weight:900; padding:8px 18px; border-radius:30px; letter-spacing:1px;">✅ TUDO EM DIA</div>`;
+            }
+
+            // --- LEITURA DO GESTOR IFOOD VIA TAMPERMONKEY STORAGE ---
+            let ifoodAlertHtml = '';
+            const ifoodPending = parseInt(GM_getValue('ifoodPendingOrders', 0), 10);
+            const ifoodUpdate = parseInt(GM_getValue('ifoodLastUpdate', 0), 10);
+            const isIfoodAlive = (Date.now() - ifoodUpdate) < 60000; // atualizado no ultimo minuto
+
+            if (isIfoodAlive && ifoodPending > 0) {
+                ifoodAlertHtml = `
+                <div style="background: linear-gradient(135deg, rgba(234, 29, 44, 0.2), rgba(234, 29, 44, 0.05)); border: 3px solid #ea1d2c; border-radius: 16px; padding: 15px 30px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; animation: pulseRedGlow 1.5s infinite ease-in-out; flex-shrink: 0;">
+                    <div style="display:flex; align-items:center; gap: 20px;">
+                        <span style="font-size: 50px; animation: heartbeat 1s infinite;">🛵</span>
+                        <div>
+                            <div style="font-size: 26px; font-weight: 900; color: #ea1d2c; text-transform: uppercase; letter-spacing: 1px;">GESTOR IFOOD: ATENÇÃO!</div>
+                            <div style="font-size: 16px; font-weight: 700; color: rgba(255,255,255,0.8);">Há ${ifoodPending} pedido(s) esperando aceite no portal do iFood que não integraram no OMS.</div>
+                        </div>
+                    </div>
+                    <div style="font-size: 60px; font-weight: 900; color: #ea1d2c; font-family:
+<truncated 45650 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.

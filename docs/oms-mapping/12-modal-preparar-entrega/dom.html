@@ -1,0 +1,52 @@
+<!-- Modal DOM: Preparar Entrega -->
+<div class="modal-content" uib-modal-transclude="">
+  <auto-focus-input class="ng-scope"></auto-focus-input>
+  <div class="modal-volumes-checking ng-scope">
+      <div class="modal-content">
+          <div class="modal-header">
+              <button type="button" class="close" ng-click="close()"><span aria-hidden="true">×</span></button>
+              <h4 class="modal-title" id="myModalLabel">Preparar entrega(s)</h4>
+          </div>
+          <div class="modal-body">
+              <div class="progress fulfillment-checked">
+                  <div class="progress-bar progress-bar-success" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                  </div>
+              </div>
+              <div class="fulfillments-sidebar">
+                  <ul>
+                      <!-- ngRepeat: fulfillment in fulfillmentSelectedList -->
+                      <li ng-repeat="fulfillment in fulfillmentSelectedList" ng-class="getInternalFulfillmentStatus(fulfillment)" class="ng-binding ng-scope unchecked">
+                          <span class="glyphicon glyphicon-ok"></span> v35944745rihp-01 <span class="badge ng-binding">1</span>
+                      </li>
+                  </ul>
+              </div>
+              <div class="fulfillment-check">
+                  <div class="waiting-check" ng-hide="fulfillment !== null">
+                      <p>Para prosseguir no preparo das entregas selecionadas, scanneie o volume de alguma entrega listada ao lado</p>
+                  </div>
+                  <div class="checking ng-hide" ng-show="fulfillment !== null">
+                      <p class="text-center">Para imprimir a nota fiscal e etiqueta de despacho, é necessário conferir o(s) volume(s) da entrega.</p>
+                      <div class="fulfillment ng-binding"></div>
+                      <ol class="fulfillment-list">
+                          <!-- ngRepeat: volume in fulfillment.getVolumes() -->
+                      </ol>
+                  </div>
+                  <div class="check-form">
+                      <form ng-submit="checkVolume()" class="ng-valid ng-dirty ng-valid-parse" data-gtm-form-interact-id="0">
+                          <div class="input-group">
+                              <!-- CAMPO DE BIPAGEM DO VOLUME (ex: 0101) -->
+                              <input type="text" ng-model="volumeId" class="form-control ng-valid ng-touched ng-dirty ng-valid-parse ng-not-empty" placeholder="Scanneie ou digite o código do volume" linx-type="barcode" data-gtm-form-interact-field-id="0">
+                              <span class="input-group-btn">
+                                  <button type="submit" class="btn btn-primary btn-md">Conferir</button>
+                              </span>
+                          </div>
+                      </form>
+                  </div>
+                  <div class="form-group form-button clearfix hidden">
+                      <button type="button" ng-click="close()" class="btn btn-default pull-right">Fechar</button>
+                  </div>
+              </div>
+          </div>
+      </div>
+  </div>
+</div>

@@ -1,0 +1,109 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura inicial da aba Detalhes do Pedido (antes da separação).
+  Algumas partes foram truncadas por serem repetitivas (modais adicionais e histórico).
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body>
+  <!-- uiView: main -->
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container order-content ng-scope" ng-controller="fulfillmentViewController">
+      
+      <!-- Detalhes do Pedido e Status -->
+      <div class="fulfillment-status-waiting">
+        <div class="page-header">
+          <h1>Detalhes da entrega</h1>
+          <div class="clearfix">
+            <div class="pull-left fulfillment-details-title">
+              <span>N⁰:</span>
+              <h2 class="ng-binding">v35944613rihp-01</h2>
+              <span class="order-status ng-binding waiting">Pendente</span>
+            </div>
+            
+            <!-- Botões de Ação (ex: Separar) -->
+            <div class="pull-right fulfillment-buttons-control ng-scope" ng-if="fulfillment.getCanPick()">
+              <fulfillment-details-buttons class="ng-isolate-scope">
+                <div>
+                  <span ng-if="showManager.showPickingButton.isShowing" class="ng-scope">
+                    <button class="btn btn-primary" ng-click="actionManager.pickingFulfillment(fulfillment)">
+                      <span class="glyphicon glyphicon-ok" aria-hidden="true"></span> Separar
+                    </button>
+                  </span>
+                </div>
+              </fulfillment-details-buttons>
+            </div>
+          </div>
+        </div>
+
+        <!-- Produtos do Pedido -->
+        <div ui-view="order-products-table" class="ng-scope">
+          <table class="table table-bordered table-striped order-products-table-products ng-scope">
+            <thead>
+              <tr>
+                <th class="table-column-check"></th>
+                <th>Fotos</th>
+                <th>Produto</th>
+                <th>Detalhes</th>
+                <th>Sku</th>
+                <th>Ean</th>
+                <th class="text-center order-products-column-quantity">Quantidade</th>
+                <th class="text-right order-products-column-unit-price">Preço</th>
+                <th class="text-right order-products-column-total">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Linha de um Produto -->
+              <tr ng-repeat="item in fulfillment.getItems()" class="ng-scope">
+                <td scope="row">
+                  <span class="glyphicon glyphicon-ok" aria-hidden="true"></span>
+                </td>
+                <td class="text-center overlay-zoom">
+                  <img src="...imagem..." width="40" height="40">
+                </td>
+                <td class="order-products-column-details">
+                  <p class="ng-binding">Jogo De Cartas - Pokémon...</p>
+                </td>
+                <td><p class="ng-binding">-</p></td>
+                <td><div class="ng-binding ng-scope">5149468</div></td>
+                <td class="ng-binding">196214155961</td>
+                <td class="text-center ng-binding ng-scope">0/3</td>
+                <td class="text-right ng-binding">R$ 94,99</td>
+                <td class="text-right ng-binding">R$ 284,97</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Conferência (após separação, geralmente oculto agora) -->
+        <div class="row check-item">
+          <div class="col-md-6 volume-btn">
+            <div class="close-volume-group ng-hide">
+              <div class="btn-group close-volume">
+                <button type="button" class="btn btn-primary" ng-click="increaseVolumes()"> Fechar volume </button>
+                <div class="volume-qty ng-binding">1</div>
+              </div>
+            </div>
+            <div class="btn-group print-volume ng-hide">
+              <button type="button" class="btn btn-primary" ng-click="showVolumePrint(fulfillment)">
+                <span class="glyphicon glyphicon-print"></span> Etiquetas de volume
+              </button>
+            </div>
+          </div>
+          <form ng-submit="checkFulfillmentItem()" class="ng-pristine ng-valid ng-hide">
+            <div class="col-md-6">
+              <div class="input-group modal-check-order-product-code">
+                <input type="text" ng-model="productKey" class="form-control" placeholder="Scanneie ou digite o número...">
+                <span class="input-group-btn">
+                  <button type="submit" class="btn btn-primary btn-md">Conferir</button>
+                </span>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura da página Lista de Despacho
+  (Envio e retirada -> Lista de despacho).
+  É a última etapa onde o usuário esquece de entrar.
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body class="">
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container shipping-create-list ng-scope">
+      <div class="page-header ng-scope" ng-controller="fulfillmentShippingController">
+        
+        <!-- uiView: list -->
+        <div ui-view="list" class="ng-scope">
+          <h1 class="ng-binding ng-scope">
+            Despacho/Envio
+            <span class="fulfillment-qty ng-binding">(1)</span>
+            
+            <!-- BOTÃO GARGALO: Criar lista de envio -->
+            <button class="btn btn-primary pull-right" ng-hide="filtered" ng-click="showTransporterModal(fulfillments)" ng-disabled="!fulfillments || fulfillments.length === 0">
+              <span class="glyphicon glyphicon-th-list"></span> Criar lista de envio
+            </button>
+          </h1>
+
+          <!-- Modal 1: Selecionar Transportadora -->
+          <div ui-view="modal-transporter" class="ng-scope">
+            <script type="text/ng-template" id="modal-transporter.html" class="ng-scope">
+              <div class="modal-transporter">
+                  <div class="modal-content">
+                      <div class="modal-body">
+                          <select class="form-control input-md" ng-model="carrierSelected" ng-options="carrier as carrier.label for carrier in carriers">
+                              <option value="">Selecione a transportadora</option>
+                          </select>
+                          <div class="form-group form-button clearfix">
+                              <button type="submit" class="btn btn-primary btn-md pull-right" ng-click="showShippingCreateList(carrierSelected)">Próximo</button>
+                          </div>
+                      </div>
+                  </div>
+              </div>
+            </script>
+          </div>
+
+          <!-- Modal 2: Confirmação -->
+          <div ui-view="modal-confirmation" class="ng-scope">
+            <script type="text/ng-template" id="modal-confirmation.html" class="ng-scope">
+              <div class="modal-confirmation">
+                  <div class="modal-content">
+                      <div class="modal-body">
+                          <p>Você escolheu {{selectedCount}} pedidos para esta lista de envio.</p>
+                          <div class="form-group form-button clearfix">
+                              <button type="submit" class="btn btn-primary btn-md pull-right" ng-click="createPackingList(fulfillments, close)">Confirmar lista</button>
+                          </div>
+                      </div>
+                  </div>
+              </div>
+            </script>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

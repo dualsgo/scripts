@@ -1,0 +1,69 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura da aba Detalhes do Pedido no exato momento
+  em que o status atinge "Faturado" e o botão "Preparar para envio" aparece.
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body>
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container order-content ng-scope" ng-controller="fulfillmentViewController">
+      
+      <!-- Status e Título -->
+      <div class="fulfillment-status-billed">
+        <div class="page-header">
+          <h1>Detalhes da entrega</h1>
+          <div class="clearfix">
+            <div class="pull-left fulfillment-details-title">
+              <span>N⁰:</span>
+              <h2 class="ng-binding">v35944745rihp-01</h2>
+              <span class="order-status ng-binding billed">Faturado</span>
+            </div>
+            
+            <!-- Botões de Ação (O BOTÃO DE PREPARAR ENTREGA) -->
+            <div class="pull-right fulfillment-buttons-control ng-scope">
+              <span ng-if="showManager.showVolumesCheckingModalButton.isShowing" class="ng-scope">
+                <button class="btn btn-primary ng-binding" 
+                        uib-tooltip="Ops! O tracking number desse pedido ainda não foi gerado. Tente novamente em alguns minutos!" 
+                        tooltip-enable="showManager.showVolumesCheckingModalButton.disabled(fulfillment || null)" 
+                        ng-disabled="showManager.showVolumesCheckingModalButton.disabled(fulfillment || null)" 
+                        ng-click="actionManager.showVolumesCheckingModal(fulfillment || null)">
+                  <span class="glyphicon glyphicon-log-out" aria-hidden="true"></span>
+                  Preparar para envio
+                </button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- TIMELINE ATUALIZADA -->
+        <div class="order-history-timeline">
+            <!-- ... etapas anteriores ... -->
+            <div class="order-history-step text-center ng-scope">
+                <p class="lead ng-binding">07/07/2026 <br>00:12</p>
+                <div class="order-history-status ng-binding">Orçamento Gerado</div>
+            </div>
+            <div class="order-history-step text-center ng-scope">
+                <p class="lead ng-binding">07/07/2026 <br>00:12</p>
+                <div class="order-history-status ng-binding">Venda Registrada</div>
+            </div>
+            <div class="order-history-step text-center ng-scope">
+                <p class="lead ng-binding">07/07/2026 <br>00:13</p>
+                <div class="order-history-status ng-binding">Aguardando Emissão Fiscal</div>
+            </div>
+            <div class="order-history-step text-center ng-scope">
+                <p class="lead ng-binding">07/07/2026 <br>00:13</p>
+                <div class="order-history-status ng-binding">Emissão Fiscal Confirmada</div>
+            </div>
+            <div class="order-history-step text-center ng-scope">
+                <p class="lead ng-binding">07/07/2026 <br>00:13</p>
+                <div class="order-history-status ng-binding">Faturado</div>
+            </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</body>
+</html>

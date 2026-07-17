@@ -1,0 +1,91 @@
+<html lang="pt" ng-controller="mainController" ng-init="main.storeConfig()" class="ng-scope">
+<!-- 
+  NOTA: Este arquivo contém a estrutura inicial da página de Seleção.
+  Esta página agrupa três abas/acordeões: Separação, Faturamento e Preparar Entrega.
+-->
+<head>
+  <!-- ... tags do head ... -->
+</head>
+<body>
+  <div ui-view="main" class="main-content ng-scope">
+    <div class="container ng-scope">
+      <div class="page-header ng-scope" id="accordions" ng-controller="selectionController">
+        <h1 class="ng-binding">Seleção</h1>
+        
+        <!-- 1. SEPARAÇÃO -->
+        <div ui-view="picking-list" class="ng-scope">
+          <div class="orders-step ng-scope">
+            <div class="selection-title" data-toggle="collapse" data-target="#pickingList">
+              <h2 class="ng-binding">Separação <span class="badge pull-right ng-binding">1</span></h2>
+            </div>
+            <div id="pickingList" class="cards-selection-list collapse in">
+              <div class="cta-area clearfix">
+                <button class="btn btn-primary pull-right" ng-click="printFulfillmentsTag(fulfillmentPickingList)">
+                  <span class="glyphicon glyphicon-print"></span> Relat. de Separação
+                </button>
+              </div>
+              <grid-fulfillments-picking-list data="fulfillmentPickingList" class="ng-isolate-scope">
+                <table class="table table-bordered table-striped picking-fulfillments">
+                  <!-- Tabela com a lista de pedidos aguardando separação -->
+                  <tbody>
+                    <tr ng-repeat="item in $ctrl._gen.data.list" class="ng-scope">
+                      <td class="table-column-checkbox">
+                        <input type="checkbox" ng-model="fulfillment.isSelected">
+                      </td>
+                      <td ng-class="{'expiring-fulfillment': fulfillment.getIsExpiring(), 'expired-fulfillment': fulfillment.getIsExpired()}">
+                        <span class="glyphicon glyphicon-exclamation-sign"></span> 07/07/26 22:00
+                      </td>
+                      <td><!-- Data Compra --> 06/07/26 22:15</td>
+                      <td><!-- ID Pedido --> v35944745rihp-01</td>
+                      <td><!-- Status --> Em Separação</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </grid-fulfillments-picking-list>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. FATURAMENTO -->
+        <div ui-view="billing-checking-list" class="ng-scope">
+          <div class="orders-step ng-scope">
+            <div class="selection-title collapsed" data-toggle="collapse" data-target="#billingCheckingList">
+              <h2 class="ng-binding">Faturamento <span class="badge pull-right ng-binding">0</span></h2>
+            </div>
+            <div id="billingCheckingList" class="cards-selection-list collapse">
+              <div class="cta-area clearfix">
+                <button class="btn btn-primary pull-right" ng-click="billingFulfillments(fulfillmentBillingCheckingList)">
+                  <span class="glyphicon glyphicon-usd"></span> Faturar
+                </button>
+              </div>
+              <grid-fulfillments-billing-checking-list data="fulfillmentBillingCheckingList" class="ng-isolate-scope">
+                <!-- Tabela de faturamento (semelhante acima) -->
+              </grid-fulfillments-billing-checking-list>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. PREPARAR ENTREGA -->
+        <div ui-view="billed-list" class="ng-scope">
+          <div class="orders-step ng-scope">
+            <div class="selection-title collapsed" data-toggle="collapse" data-target="#billedList">
+              <h2 class="ng-binding">Preparar Entrega <span class="badge pull-right ng-binding">0</span></h2>
+            </div>
+            <div id="billedList" class="cards-selection-list collapse">
+              <div class="cta-area clearfix">
+                <button class="btn btn-primary pull-right" ng-click="showVolumesCheckingModal(fulfillmentBilled)">
+                  <span class="glyphicon glyphicon-ok"></span>Preparar
+                </button>
+              </div>
+              <grid-fulfillments-billed-list data="fulfillmentBilled" class="ng-isolate-scope">
+                 <!-- Tabela de pedidos prontos para entrega (semelhante acima) -->
+              </grid-fulfillments-billed-list>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</body>
+</html>
