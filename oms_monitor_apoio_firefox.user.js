@@ -851,11 +851,13 @@
 
         .new-order-modal {
             position: fixed;
-            top: 80px;
-            bottom: 25px;
-            left: 30px;
-            right: 30px;
-            width: auto !important;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            margin: auto;
+            width: 50vw !important;
+            height: 50vh !important;
             max-width: none !important;
             background: linear-gradient(135deg, rgba(10, 25, 47, 0.98), rgba(2, 12, 27, 0.99)) !important;
             border: 3px solid var(--neon-green) !important;
@@ -875,11 +877,13 @@
 
         .new-order-modal.rotate-mode {
             position: fixed;
-            top: 80px;
-            bottom: 25px;
-            left: 30px;
-            right: 30px;
-            width: auto !important;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            margin: auto;
+            width: 50vw !important;
+            height: 50vh !important;
             max-width: none !important;
             border-color: var(--neon-blue) !important;
             box-shadow: 0 20px 60px rgba(0, 210, 255, 0.4) !important;
@@ -1331,7 +1335,7 @@
             const secs = Math.floor((absDiff % 60000) / 1000);
             const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 
-            if (diff < 0) return { minutes: -mins, text: `🚨 ESTOURADO! -${timeStr}`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red" };
+            if (diff < 0) return { minutes: -mins, text: `🚨 ATRASADO`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red" };
             if (isExpress || mins < 15) return { minutes: mins, text: `🔥 CRÍTICO: ${timeStr}`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red" };
             if (mins < 40) return { minutes: mins, text: `⏳ ATENÇÃO: ${timeStr}`, cardClass: "tv-card-orange", urgency: 2, textClass: "time-orange" };
 
@@ -1696,7 +1700,7 @@
 
                     // 4. Determinar se o SLA geral do pedido está estourado (meta real)
                     const orderSla = getSLAInfo(activeHighlightOrder.createdAt, activeHighlightOrder.isExpress);
-                    const isSlaExpired = orderSla.urgency === 3 && orderSla.text.includes('ESTOURADO');
+                    const isSlaExpired = orderSla.urgency === 3 && orderSla.text.includes('ATRASADO');
 
                     let marqueeContent = '';
                     if (isSlaExpired) {
@@ -1747,19 +1751,11 @@
                         modalEl.classList.remove('rotate-mode');
                     }
 
-                    const item = apiItemsList[activeOrderItemIndex] || {};
-                    const isMultiple = Number(item.quantity) > 1;
-                    const qtyBadgeStyle = isMultiple
-                        ? `background: rgba(255, 69, 0, 0.2); border: 3px solid #FF4500; color: #FF4500; box-shadow: 0 0 20px rgba(255, 69, 0, 0.6);`
-                        : `background: rgba(0, 255, 136, 0.1); border: 2px solid rgba(0, 255, 136, 0.3); color: var(--neon-green);`;
-                    const qtyText = isMultiple ? `⚠️ QTD: ${item.quantity}` : `QTD: ${item.quantity || 1}`;
-                    const imgUrl = item.imageUrl || '';
-
                     const modalTitle = isRotation ? '⚠️ PEDIDO PENDENTE' : '🚨 NOVO PEDIDO';
                     const subSlaTitle = isRotation ? 'TELA OPERACIONAL CONGELA EM' : 'SLA DE SEPARAÇÃO IMEDIATO';
                     const countdownLabel = isRotation ? 'OCULTA EM' : 'FALTA EM';
 
-                    const isAtrasado = orderSla.text.includes('ESTOURADO');
+                    const isAtrasado = orderSla.text.includes('ATRASADO');
                     const statusText = isAtrasado ? 'ATRASADO' : 'NOVO';
                     let rawCarrier = String(activeHighlightOrder.carrier || activeHighlightOrder.deliveryType || (deliveryInfo.isPickup ? 'RETIRADA' : 'ENTREGA')).toUpperCase();
                     if (rawCarrier.length > 20) rawCarrier = rawCarrier.substring(0, 17) + '...';
@@ -1768,80 +1764,32 @@
                     const statusColor = isAtrasado ? 'var(--neon-red)' : 'var(--neon-green)';
 
                     modalEl.innerHTML = `
-                    <div style="display: flex; height: 100%; width: 100%; background: radial-gradient(circle, rgba(11,11,15,0.95) 0%, rgba(20,20,30,0.95) 100%); overflow: hidden; font-family: 'Lilita One', cursive; border-radius: 12px; box-sizing: border-box;">
-                        <!-- Lado Esquerdo: Produto -->
-                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; position: relative;">
-                            <div style="position: absolute; top: 30px; left: 40px; font-size: 50px; color: rgba(255,255,255,0.1); white-space: nowrap; font-weight: 900; text-transform: uppercase;">
-                                ITEM ${activeOrderItemIndex + 1} DE ${apiItemsList.length}
-                            </div>
-
-                            <!-- Imagem -->
-                            <div style="height: 40vh; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; width: 100%;">
-                                ${imgUrl
-                                    ? `<img src="${imgUrl}" style="max-height: 100%; max-width: 100%; object-fit: contain; filter: drop-shadow(0 20px 30px rgba(0,0,0,0.5)); border-radius: 20px; z-index: 2;">`
-                                    : `<div style="font-size: 100px; filter: grayscale(1);">🧸</div>`
-                                }
-                            </div>
-
-                            <div style="font-size: 40px; color: #fff; text-align: center; max-width: 90%; line-height: 1.1; margin-bottom: 30px; z-index: 2; text-shadow: 0 4px 10px rgba(0,0,0,0.5); font-family: sans-serif; font-weight: bold;">
-                                ${item.name || 'Produto sem nome'}
-                            </div>
-
-                            <div style="display: flex; gap: 20px; justify-content: center; width: 100%; z-index: 2;">
-                                <div style="background: rgba(100, 180, 255, 0.1); padding: 15px 30px; border-radius: 15px; font-family: monospace; font-size: 36px; font-weight: 900; color: #aae9ff; border: 2px solid rgba(100, 180, 255, 0.3); letter-spacing: 2px; text-shadow: 0 0 10px rgba(100,180,255,0.3);">
-                                    SAP: ${item.sku || '---'}
-                                </div>
-                                <div style="background: rgba(255, 220, 100, 0.1); padding: 15px 30px; border-radius: 15px; font-family: monospace; font-size: 36px; font-weight: 900; color: #ffe6aa; border: 2px solid rgba(255, 220, 100, 0.3); letter-spacing: 2px; text-shadow: 0 0 10px rgba(255,220,100,0.3);">
-                                    EAN: ${item.ean || '---'}
-                                </div>
-                                <div style="${qtyBadgeStyle} padding: 15px 30px; border-radius: 15px; font-size: 36px; font-weight: 900; letter-spacing: 2px;">
-                                    ${qtyText}
-                                </div>
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; width: 100%; background: radial-gradient(circle, rgba(11,11,15,0.95) 0%, rgba(20,20,30,0.95) 100%); overflow: hidden; font-family: 'Lilita One', cursive; border-radius: 12px; box-sizing: border-box; padding: 20px;">
+                        
+                        <div style="font-size: 24px; font-weight: 900; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 3px; margin-bottom: 15px; text-align: center;">${modalTitle}</div>
+                        <div style="font-size: 60px; font-weight: 900; color: ${tipoColor}; text-shadow: 0 0 30px ${tipoColor}40; line-height: 1.1; margin-bottom: 30px; word-break: break-word; text-align: center;">${tipoText}</div>
+                        
+                        <div style="margin-bottom: 30px; text-align: center;">
+                            <div style="font-size: 18px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">TEMPO PARA SEPARAÇÃO</div>
+                            <div id="modal-sla-time" style="font-size: 70px; font-weight: 900; color: ${isAtrasado ? 'var(--neon-red)' : '#fff'}; text-shadow: 0 0 30px ${isAtrasado ? 'rgba(255,0,0,0.5)' : 'rgba(255,255,255,0.2)'}; line-height: 1;">
+                                ${orderSla.text.split(' ').pop()}
                             </div>
                         </div>
 
-                        <!-- Lado Direito: Resumo do Pedido -->
-                        <div style="width: 350px; background: rgba(0,0,0,0.4); border-left: 2px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 40px 20px; box-sizing: border-box;">
-
-                            <div style="text-align: center; width: 100%;">
-                                <div style="font-size: 20px; font-weight: 900; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">${modalTitle}</div>
-                                <div style="font-size: 36px; font-weight: 900; color: ${tipoColor}; text-shadow: 0 0 20px ${tipoColor}40; line-height: 1.1; margin-bottom: 20px; word-break: break-word;">${tipoText}</div>
-
-                                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 30px; width: 100%; box-sizing: border-box;">
-                                    <div style="font-size: 16px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Pedido OMS</div>
-                                    <div style="font-size: 32px; color: #fff; font-weight: 900; word-break: break-all; line-height: 1.1;">#${activeHighlightOrder.id}</div>
-                                </div>
+                        <div style="background: rgba(255,255,255,0.03); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.05); width: 80%; box-sizing: border-box; text-align: center;">
+                            <div style="display: flex; justify-content: center; font-size: 14px; font-weight: 800; color: rgba(255,255,255,0.4); margin-bottom: 10px;">
+                                <span>${subSlaTitle}</span>
                             </div>
-
-                            <div style="text-align: center; width: 100%;">
-                                <div style="font-size: 18px; font-weight: 900; color: ${statusColor}; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; background: ${statusColor}20; padding: 10px; border-radius: 10px; border: 1px solid ${statusColor}40;">
-                                    STATUS: ${statusText}
-                                </div>
-
-                                <!-- Cronômetro SLA Original -->
-                                <div style="margin-bottom: 30px;">
-                                    <div style="font-size: 14px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">SLA do Pedido</div>
-                                    <div id="modal-sla-time" style="font-size: 50px; font-weight: 900; color: ${isAtrasado ? 'var(--neon-red)' : '#fff'}; text-shadow: 0 0 20px ${isAtrasado ? 'rgba(255,0,0,0.5)' : 'rgba(255,255,255,0.2)'}; line-height: 1;">
-                                        ${orderSla.text.split(' ').pop()}
-                                    </div>
-                                </div>
-
-                                <!-- Barra de Progresso de Alerta -->
-                                <div style="background: rgba(255,255,255,0.03); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.05); width: 100%; box-sizing: border-box;">
-                                    <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 800; color: rgba(255,255,255,0.4); margin-bottom: 10px;">
-                                        <span>${subSlaTitle}</span>
-                                    </div>
-                                    <div style="font-size: 30px; font-weight: 900; color: #fff; margin-bottom: 15px;" id="oms-new-order-countdown-text">
-                                        ${countdownLabel} ${Math.ceil(remainingMs / 1000)}s
-                                    </div>
-                                    <div style="background: rgba(255,255,255,0.1); border-radius: 8px; height: 10px; overflow: hidden; width: 100%;">
-                                        <div id="oms-new-order-progress-bar" style="background: ${themeColor}; height: 100%; width: ${percent}%; box-shadow: 0 0 15px ${themeColor}; transition: width 0.2s linear;"></div>
-                                    </div>
-                                </div>
+                            <div style="font-size: 30px; font-weight: 900; color: #fff; margin-bottom: 15px;" id="oms-new-order-countdown-text">
+                                ${countdownLabel} ${Math.ceil(remainingMs / 1000)}s
+                            </div>
+                            <div style="background: rgba(255,255,255,0.1); border-radius: 10px; height: 10px; overflow: hidden; width: 100%;">
+                                <div id="oms-new-order-progress-bar" style="background: ${themeColor}; height: 100%; width: ${percent}%; box-shadow: 0 0 20px ${themeColor}; transition: width 0.2s linear;"></div>
                             </div>
                         </div>
+
                     </div>
-                `;
+                    `;
                     modalEl.style.display = 'block';
                 } else {
                     // Se é o mesmo pedido, ATUALIZAR APENAS a timeline, o countdown do modal (Flicker-Free!)
@@ -1860,24 +1808,12 @@
 
                     const modalSlaTimeEl = document.getElementById('modal-sla-time');
                     if (modalSlaTimeEl) {
-                        const isAtrasado = orderSla.text.includes('ESTOURADO');
+                        const isAtrasado = orderSla.text.includes('ATRASADO');
                         modalSlaTimeEl.innerText = orderSla.text.split(' ').pop();
                         modalSlaTimeEl.style.color = isAtrasado ? 'var(--neon-red)' : '#fff';
                     }
-
-                    // Ticking do cronômetro de picking recomendado em tempo real
-                    const timerWrapperEl = document.getElementById('oms-picking-timer-wrapper');
-                    const timerValueEl = document.getElementById('oms-picking-timer-value');
-
-                    if (timerValueEl) {
-                        timerValueEl.innerText = pickingTimerExpired ? '🚨 LIMITE EXCEDIDO' : pickingTimerStr;
-                    }
-                    if (timerWrapperEl) {
-                        timerWrapperEl.style.borderColor = pickingTimerColor;
-                        timerWrapperEl.style.animation = pickingTimerPulse;
-                    }
                 } // FIM DO UPDATE TIMER
-                } // FIM DO ELSE (CARROSSEL)
+            } // FIM DO ELSE (CARROSSEL)
             } else {
                 modalEl.style.display = 'none';
                 modalEl.removeAttribute('data-showing-id');
@@ -1886,49 +1822,14 @@
 
             let emptyStateHtml = '';
             if (isListEmpty) {
-                const ifoodAguardando = parseInt(GM_getValue('ifoodAguardandoColeta', 0), 10);
-                const rappiAguardando = parseInt(GM_getValue('rappiAguardandoColeta', 0), 10);
                 emptyStateHtml = `
                     <div style="display: flex; height: 100vh; background: radial-gradient(circle, rgba(11,11,15,1) 0%, rgba(20,20,30,1) 100%); width: 100vw; overflow: hidden; font-family: 'Lilita One', cursive; align-items: center; justify-content: center;">
-
-                        <!-- Lado Esquerdo: Relógio Gigante e Status -->
-                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; border-right: 2px solid rgba(255,255,255,0.05);">
+                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px;">
                             <div style="font-size: 200px; font-weight: 900; color: #fff; line-height: 1; text-shadow: 0 0 40px rgba(255,255,255,0.2);">${clockTime}</div>
                             <div style="font-size: 50px; color: rgba(255,255,255,0.5); font-weight: 700; margin-top: 10px; text-transform: uppercase;">${clockDate}</div>
                             <div style="margin-top: 60px; padding: 20px 40px; background: rgba(0, 255, 136, 0.1); border: 2px solid var(--neon-green); border-radius: 30px; color: var(--neon-green); font-size: 28px; font-weight: 900; letter-spacing: 2px; animation: heartbeat 2s infinite;">
                                 ✅ NENHUMA PENDÊNCIA NO MOMENTO
                             </div>
-                        </div>
-
-                        <!-- Lado Direito: Monitor de Coleta -->
-                        <div style="width: 500px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; margin-right: 80px;">
-
-                            <div style="text-align: center; background: rgba(0, 0, 0, 0.4); border: 2px solid rgba(255, 255, 255, 0.1); padding: 30px; border-radius: 24px; width: 100%; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
-                                <div style="font-size: 28px; color: #fff; font-weight: 900; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 30px;">
-                                    🛵 Aguardando Coleta
-                                </div>
-                                
-                                <div style="display: flex; flex-direction: column; gap: 20px;">
-                                    <!-- iFood -->
-                                    <div style="background: ${ifoodAguardando > 0 ? 'rgba(234, 29, 44, 0.15)' : 'rgba(255, 255, 255, 0.05)'}; border: 2px solid ${ifoodAguardando > 0 ? '#ea1d2c' : 'rgba(255,255,255,0.1)'}; padding: 20px; border-radius: 16px; display: flex; justify-content: space-between; align-items: center; ${ifoodAguardando > 0 ? 'animation: pulseRedGlow 2s infinite;' : ''}">
-                                        <div style="display: flex; align-items: center; gap: 15px;">
-                                            <span style="font-size: 40px;">🔴</span>
-                                            <span style="font-size: 28px; font-weight: bold; color: ${ifoodAguardando > 0 ? '#ea1d2c' : 'rgba(255,255,255,0.5)'};">iFood</span>
-                                        </div>
-                                        <span style="font-size: 50px; font-weight: 900; color: ${ifoodAguardando > 0 ? '#ea1d2c' : 'rgba(255,255,255,0.3)'}; font-family: 'Lilita One', cursive; line-height: 1;">${ifoodAguardando}</span>
-                                    </div>
-                                    
-                                    <!-- Rappi -->
-                                    <div style="background: ${rappiAguardando > 0 ? 'rgba(255, 69, 0, 0.15)' : 'rgba(255, 255, 255, 0.05)'}; border: 2px solid ${rappiAguardando > 0 ? '#ff4500' : 'rgba(255,255,255,0.1)'}; padding: 20px; border-radius: 16px; display: flex; justify-content: space-between; align-items: center; ${rappiAguardando > 0 ? 'animation: pulseYellowGlow 2s infinite;' : ''}">
-                                        <div style="display: flex; align-items: center; gap: 15px;">
-                                            <span style="font-size: 40px;">🟠</span>
-                                            <span style="font-size: 28px; font-weight: bold; color: ${rappiAguardando > 0 ? '#ff4500' : 'rgba(255,255,255,0.5)'};">Rappi</span>
-                                        </div>
-                                        <span style="font-size: 50px; font-weight: 900; color: ${rappiAguardando > 0 ? '#ff4500' : 'rgba(255,255,255,0.3)'}; font-family: 'Lilita One', cursive; line-height: 1;">${rappiAguardando}</span>
-                                    </div>
-                                </div>
-                            </div>
-
                         </div>
                     </div>
                 `;
@@ -2069,20 +1970,8 @@
             if (o.statusNativo === 'INVOICING_FAIL') stageLabel = 'FALHA DE FATURAMENTO';
             if (o.statusNativo === 'SEND_READY') stageLabel = 'CONFERIDO';
 
-            let badgeStyleClass = 'badge-green';
-            if (sla.urgency === 2) badgeStyleClass = 'badge-orange';
-            if (sla.urgency === 3 || (bottleneck && bottleneck.isCritical)) badgeStyleClass = 'badge-red';
-
             const isIfood = delivery.label.includes('IFOOD');
             const isRappi = delivery.label.includes('RAPPI');
-            let deliveryGlowStyle = 'border-left: 3px solid var(--neon-blue); padding-left: 8px;';
-            if (isPickupOrder) {
-                deliveryGlowStyle = 'border-left: 3px solid var(--neon-yellow); padding-left: 8px;';
-            } else if (isIfood) {
-                deliveryGlowStyle = 'border-left: 3px solid #ea1d2c; padding-left: 8px;';
-            } else if (isRappi) {
-                deliveryGlowStyle = 'border-left: 3px solid #ff7800; padding-left: 8px;';
-            }
 
             let deliveryAppTipHtml = '';
             if (isIfood) {
@@ -2159,49 +2048,6 @@
 
                 ${bottleneckHtml}
                 ${deliveryAppTipHtml}
-
-                <!-- Product Items Detail List -->
-                ${(() => {
-                    const itemsList = Array.isArray(o.items) ? o.items : [];
-                    if (itemsList.length === 0) return '';
-                    let itemsHtml = `
-                        <div class="tv-card-items-sublist" style="
-                            display: flex;
-                            flex-direction: column;
-                            gap: 10px;
-                            background: rgba(0, 0, 0, 0.25);
-                            padding: 12px;
-                            border-radius: 8px;
-                            margin-top: 5px;
-                            border: 1px solid rgba(255, 255, 255, 0.04);
-                        ">
-                    `;
-                    itemsList.forEach((item, index) => {
-                        const imgHtml = item.imageUrl
-                            ? `<img src="${item.imageUrl}" style="width: 48px; height: 48px; border-radius: 6px; object-fit: cover; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08);" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />`
-                            : '';
-                        const fallbackImgHtml = `<div style="width: 48px; height: 48px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); display: ${item.imageUrl ? 'none' : 'flex'}; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">🧸</div>`;
-
-                        const isLast = index === itemsList.length - 1;
-                        const borderStyle = isLast ? '' : 'border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 10px;';
-
-                        itemsHtml += `
-                            <div style="display: flex; flex-direction: column; gap: 8px; ${borderStyle}">
-                                <span style="font-size: 14px; font-weight: 800; color: #ffffff; line-height: 1.3;">${item.name}</span>
-                                <div style="display: flex; align-items: center; gap: 12px;">
-                                    ${imgHtml}
-                                    ${fallbackImgHtml}
-                                    <div style="display: flex; flex-direction: column; flex: 1;">
-                                        <span style="font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, 0.5);">SAP: ${item.sku} | EAN: ${item.ean || '---'}</span>
-                                    </div>
-                                    <span style="font-size: 16px; font-weight: 900; color: var(--neon-green); background: rgba(0, 255, 136, 0.08); padding: 4px 12px; border-radius: 6px; border: 1px solid rgba(0, 255, 136, 0.15); flex-shrink: 0;">QTD: ${item.quantity}</span>
-                                </div>
-                            </div>
-                        `;
-                    });
-                    itemsHtml += `</div>`;
-                    return itemsHtml;
-                })()}
             </div>
         `;
         }
