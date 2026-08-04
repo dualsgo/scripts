@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ri Happy - Painel de Vendas em Tempo Real</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app-container" class="app-container">
+    <header id="app-header" class="header">
+      <div class="header-content">
+        <div class="header-title-wrapper">
+          <h1 class="header-title">Painel de Vendas em Tempo Real</h1>
+          <p class="header-subtitle">Integração Oficial do Looker</p>
+        </div>
+        <button id="btn-screenshot" class="btn-primary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+          Modo Captura de Tela
+        </button>
+      </div>
+
+      <div class="alert-box warning">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="alert-icon"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <div class="alert-content">
+          <h3>Acesso Restrito (Requer Login)</h3>
+          <p>Este painel carrega os dados originais em tempo real. <strong>Só irá funcionar se o colaborador tiver acesso e já estiver logado</strong> com um e-mail corporativo ou da loja no navegador.</p>
+        </div>
+      </div>
+
+      <div class="alert-box info">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="alert-icon"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <div class="alert-content">
+          <h3>Cabeçalhos Importantes para Análise e Print</h3>
+          <p>Certifique-se de que os seguintes indicadores estão visíveis antes de realizar a captura de tela:</p>
+          <div class="tags-container">
+            <span class="tag">Desc Loja</span>
+            <span class="tag">Meta Hoje</span>
+            <span class="tag">Venda Total</span>
+            <span class="tag">% Meta Hoje</span>
+            <span class="tag">Cresc Venda Ly</span>
+            <span class="tag">DSe DM</span>
+            <span class="tag">Cupons</span>
+            <span class="tag">TKM</span>
+            <span class="tag">PA</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div id="btn-exit-wrapper" class="btn-exit-wrapper hidden">
+      <button id="btn-exit-screenshot" class="btn-dark">Sair do Modo Captura</button>
+    </div>
+
+    <main id="iframe-container" class="iframe-container">
+      <iframe 
+        src="https://rihappy.cloud.looker.com/embed/dashboards/193?Superintendente=&Base+Lojas=&Bandeira=&Regional=RJ1-DANIELE&Cluster=" 
+        title="Looker Dashboard"
+        allowfullscreen>
+      </iframe>
+    </main>
+  </div>
+
+  <script>
+    const btnScreenshot = document.getElementById('btn-screenshot');
+    const btnExitScreenshot = document.getElementById('btn-exit-screenshot');
+    const header = document.getElementById('app-header');
+    const iframeContainer = document.getElementById('iframe-container');
+    const btnExitWrapper = document.getElementById('btn-exit-wrapper');
+    const appContainer = document.getElementById('app-container');
+
+    btnScreenshot.addEventListener('click', () => {
+      header.classList.add('hidden');
+      iframeContainer.classList.add('fullscreen');
+      appContainer.classList.add('fullscreen');
+      btnExitWrapper.classList.remove('hidden');
+    });
+
+    btnExitScreenshot.addEventListener('click', () => {
+      header.classList.remove('hidden');
+      iframeContainer.classList.remove('fullscreen');
+      appContainer.classList.remove('fullscreen');
+      btnExitWrapper.classList.add('hidden');
+    });
+  </script>
+</body>
+</html>
