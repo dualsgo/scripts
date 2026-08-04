@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Ações - KPIs</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Header Area -->
+        <header class="header">
+            <div class="logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+                <h1>Painel de Resultados</h1>
+            </div>
+            
+            <div class="controls" style="display: flex; align-items: center;">
+                <button id="btnGenerateReport" class="btn btn-outline" style="display: none; margin-right: 12px;">Gerar Relatório</button>
+                <div class="upload-btn-wrapper">
+                    <button class="btn">Carregar JSON</button>
+                    <input type="file" id="fileUpload" accept=".json, .json_label" />
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Area -->
+        <main class="dashboard" id="dashboardArea" style="display: none;">
+            
+            <div class="kpi-summary" id="kpiSummary">
+                <!-- KPIs will be injected here -->
+            </div>
+
+            <div class="main-content">
+                <!-- Chart Section -->
+                <section class="chart-section panel">
+                    <div class="panel-header">
+                        <h2>Evolução por Semana</h2>
+                        <div class="indicator-selector">
+                            <label for="indicatorSelect">Métrica:</label>
+                            <select id="indicatorSelect">
+                                <!-- Options injected via JS -->
+                            </select>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="mainChart"></canvas>
+                    </div>
+                </section>
+
+                <!-- Data Table Section -->
+                <section class="table-section panel">
+                    <div class="panel-header">
+                        <h2>Variações Semanais</h2>
+                    </div>
+                    <div class="table-container">
+                        <table id="dataTable">
+                            <thead>
+                                <!-- Headers injected via JS -->
+                            </thead>
+                            <tbody>
+                                <!-- Rows injected via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </main>
+        
+        <div class="empty-state" id="emptyState">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <h2>Nenhum dado carregado</h2>
+            <p>Faça o upload do seu arquivo JSON para visualizar o dashboard.</p>
+        </div>
+
+        <!-- Modal de Relatório -->
+        <div id="reportModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 style="font-size: 1.25rem; font-weight: 600;">Relatório para Copiar</h2>
+                    <button id="closeReportModal" class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body" style="display: flex; flex-direction: column; gap: 16px; padding: 24px;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <label for="reportWeekSelect" style="font-size: 0.875rem; color: var(--text-muted); font-weight: 600;">Visualização:</label>
+                        <select id="reportWeekSelect" style="background-color: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: var(--radius-sm); outline: none; flex-grow: 1;">
+                            <!-- Injetado via JS -->
+                        </select>
+                    </div>
+                    <textarea id="reportTextarea" rows="15" style="width: 100%; background: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius-sm); font-family: monospace; resize: vertical;"></textarea>
+                    <button id="btnCopyReport" class="btn">Copiar para a Área de Transferência</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal de Detalhes da Semana -->
+        <div id="weekModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Detalhes da Semana</h2>
+                    <button id="closeModal" class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body" id="modalBody">
+                    <!-- Detalhes injetados via JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

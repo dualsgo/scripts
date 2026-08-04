@@ -1,0 +1,186 @@
+
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Relatório Preços a Serem Alterados - Filial: 1187, Filial 1187 1187-CARIOCA SHOPPING, Data 27/05/2026, Com estoque sim</title>
+    <script src="/jquery/jquery.js"></script>
+    <script src="/bootstrap/js/bootstrap.js"></script>
+    <link rel="stylesheet" type="text/css" href="/kwTemplate/css/bootstrap.css" media="all">
+    <style>
+        #container-gestao-a-vista table,
+        #container-gestao-a-vista tr
+        {
+            border: 0px;
+            background-color: #FFFFFF;
+        }
+
+        #container-gestao-a-vista td
+        {
+            border-top: 0px;
+            border-left: 0px;
+        }
+
+        #container-gestao-a-vista table tbody tr td:last-child
+        {
+            border-right: 0px;
+        }
+
+       #container-gestao-a-vista .tr-cabecalho-nome
+       {
+           border-top: 1em solid white;
+       }
+
+       #container-gestao-a-vista .td-cabecalho-nome
+       {
+           background-color: #C4C4C4;
+       }
+    </style>
+</head>
+<body>
+        <div class="a4-landscape" id="container-com-estoque">
+                        <table class="table table-bordered table-striped lista">
+                                    <thead>
+                        <tr>
+                            <th colspan="7">
+                                COM ESTOQUE - KIDS                            </th>
+                        </tr>
+                    </thead>
+                
+                <tbody>
+                    <tr>
+                        <td colspan="7">
+                            <strong>
+                                Fornecedor: HASBRO DO BRASIL IND E COM DE BRINQ <sup>08743754000305</sup>
+                            </strong>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <strong>Cod. Interno</strong>
+                        </td>
+                        <td>
+                            <strong>Mercadoria</strong>
+                        </td>
+                        <td>
+                            <strong>Cod. Fornecedor</strong>
+                        </td>
+                        <td>
+                            <strong>Estoque</strong>
+                        </td>
+                        <td>
+                            <strong>Preço Atual</strong>
+                        </td>
+                        <td>
+                            <strong>Novo Preço</strong>
+                        </td>
+                        <td>
+                            <strong>Promoção</strong>
+                        </td>
+                    </tr>
+
+                                        <tr>
+                        <td>
+                            5135205                        </td>
+                        <td>
+                            JOGO CLUE CLUEDO                                                </td>
+                        <td>
+                            F6420                        </td>
+                        <td>
+                            15,000                        </td>
+                        <td>
+                            119,95                        </td>
+                        <td>
+                            179,99                        </td>
+                        <td>
+                            0,00                        </td>
+                    </tr>
+                                        <tr>
+                        <td>
+                            5136064                        </td>
+                        <td>
+                            BEYBLADE DRAN SWORD 3                                           </td>
+                        <td>
+                            F9580                        </td>
+                        <td>
+                            4,000                        </td>
+                        <td>
+                            99,95                        </td>
+                        <td>
+                            149,99                        </td>
+                        <td>
+                            0,00                        </td>
+                    </tr>
+                                        <tr>
+                        <td>
+                            5136047                        </td>
+                        <td>
+                            BEYBLADE X ARROW 4                                              </td>
+                        <td>
+                            F9582                        </td>
+                        <td>
+                            12,000                        </td>
+                        <td>
+                            99,91                        </td>
+                        <td>
+                            149,99                        </td>
+                        <td>
+                            0,00                        </td>
+                    </tr>
+                    
+                <tbody>
+                    <tr>
+                        <td colspan="7">
+                            <strong>
+                                Fornecedor: HASBRO DO BRASIL INDUSTRIA E COMERC <sup>08743754000496</sup>
+                            </strong>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <strong>Cod. Interno</strong>
+                        </td>
+                        <td>
+                            <strong>Mercadoria</strong>
+                        </td>
+                        <td>
+                            <strong>Cod. Fornecedor</strong>
+                        </td>
+                        <td>
+                            <strong>Estoque</strong>
+                        </td>
+                        <td>
+                            <strong>Preço Atual</strong>
+                        </td>
+                        <td>
+                            <strong>Novo Preço</strong>
+                        </td>
+                        <td>
+                            <strong>Promoção</strong>
+                        </td>
+                    </tr>
+
+                                        <tr>
+                        <td>
+                            5145580                        </td>
+                        <td>
+                            JOGO JENGA C DADO DIG                                           </td>
+                        <td>
+                            G14995B03                        </td>
+                        <td>
+                            20,000                        </td>
+                        <td>
+                            99,91                        </td>
+                        <td>
+                            149,99                        </td>
+                        <td>
+                            0,00                        </td>
+                    </tr>
+                    
+                </tbody>
+            </table>
+        </div>
+
+                        </body>
+        </html>
+
+        
