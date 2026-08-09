@@ -5,13 +5,6 @@
 // @description  Monitor de pedidos OMS otimizado para TV: Painel em tela cheia com letras gigantes, atualizações em tempo real das pendências, alarmes insistentes automáticos e visualização operacional 100% hands-free.
 // @author   	Antigravity AI
 // @match    	https://*.linxoms.com.br/*
-// @match    	https://*.ifood.com.br/*
-// @match    	https://gestordepedidos.ifood.com.br/*
-// @match    	https://merchant.ifood.com.br/*
-// @match    	https://separador.ifood.com.br/*
-// @match    	https://*.rappi.com/*
-// @match    	https://*.rappi.com.br/*
-// @match    	https://mitienda.rappi.com.br/*
 // @connect  	linxoms.com.br
 // @connect  	rihappy.com.br
 // @grant    	GM_setValue
@@ -23,178 +16,10 @@
     'use strict';
 
     function initScriptCore() {
-        // --- INTEGRAÇÃO DIRETA COM PORTAL IFOOD ---
-        if (window.location.href.indexOf('separador.ifood.com.br') !== -1) {
-            setInterval(() => {
-                let newOrdersCount = 0;
-                let aguardandoColetaCount = 0;
-                let isLoggedIn = true;
-                try {
-                    if (document.querySelector('input[type="password"]')) {
-                        isLoggedIn = false;
-                    }
-                    const pedidosLink = document.querySelector('a[href*="/order/latest"]');
-                    if (pedidosLink) {
-                        const outputEl = pedidosLink.querySelector('output');
-                        if (outputEl && outputEl.textContent) {
-                            const val = parseInt(outputEl.textContent.trim(), 10);
-                            if (!isNaN(val)) newOrdersCount = val;
-                        }
-                    } else {
-                        const outputByAria = document.querySelector('output[aria-label*="pedidos"]');
-                        if (outputByAria && outputByAria.textContent) {
-                            const val = parseInt(outputByAria.textContent.trim(), 10);
-                            if (!isNaN(val)) newOrdersCount = val;
-                        } else {
-                            const pElements = Array.from(document.querySelectorAll('p'));
-                            const pedidosP = pElements.find(p => p.textContent && p.textContent.trim().toLowerCase() === 'pedidos');
-                            if (pedidosP && pedidosP.parentElement) {
-                                const outputEl = pedidosP.parentElement.querySelector('output');
-                                if (outputEl && outputEl.textContent) {
-                                    const val = parseInt(outputEl.textContent.trim(), 10);
-                                    if (!isNaN(val)) newOrdersCount = val;
-                                }
-                            }
-                        }
-                    }
-
-                    try {
-                        // Tenta pelo link específico do App Separador (Expedição)
-                        const expedicaoLink = document.querySelector('a[href*="/order/expedition"]');
-                        if (expedicaoLink) {
-                            const outputEl = expedicaoLink.querySelector('output');
-                            if (outputEl && outputEl.textContent) {
-                                const val = parseInt(outputEl.textContent.replace(/[^0-9]/g, ''), 10);
-                                if (!isNaN(val)) aguardandoColetaCount = val;
-                            }
-                        }
-
-                        // Se não achou pelo link, tenta pelo texto (Gestor de Pedidos Padrão)
-                        if (aguardandoColetaCount === 0) {
-                            const headers = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, span, div, button'));
-                            const prontoEl = headers.find(el => {
-                                const t = el.textContent ? el.textContent.trim().toLowerCase() : '';
-                                return t === 'prontos' || t === 'pronto' || t === 'aguardando entregador' || t === 'aguardando coleta' || t === 'expedição';
-                            });
-                            if (prontoEl && prontoEl.parentElement) {
-                                const numEl = prontoEl.parentElement.querySelector('output, span.badge, div.badge');
-                                if (numEl && numEl.textContent) {
-                                    const val = parseInt(numEl.textContent.replace(/[^0-9]/g, ''), 10);
-                                    if (!isNaN(val)) aguardandoColetaCount = val;
-                                } else {
-                                    const txt = prontoEl.parentElement.textContent.replace(/[^0-9]/g, '');
-                                    if (txt) aguardandoColetaCount = parseInt(txt, 10);
-                                }
-                            }
-                        }
-                    } catch (e) { }
-
-                    let ifoodOrderDetails = null;
-                    try {
-                        const h1s = Array.from(document.querySelectorAll('h1'));
-                        const orderH1 = h1s.find(h => h.textContent && h.textContent.includes('IFOOD') && h.textContent.includes('#'));
-                        if (orderH1) {
-                            let prazo = "NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO";
-                            const pElements = Array.from(document.querySelectorAll('p'));
-                            const prazoEl = pElements.find(p => p.textContent && (p.textContent.toLowerCase().includes('inicie em') || p.textContent.toLowerCase().includes('separar até')));
-                            if (prazoEl) {
-                                prazo = prazoEl.textContent.trim().toUpperCase();
-                            } else {
-                                const h1Times = h1s.find(h => h.textContent && h.textContent.includes(':'));
-                                if (h1Times) prazo = "INICIE EM " + h1Times.textContent.trim() + " HORAS";
-                            }
-
-                            let items = [];
-                            const productNames = document.querySelectorAll('[data-testid^="product-card-"] p[id^="product-name-"]');
-                            if (productNames.length === 0) {
-                                const fallbackNames = document.querySelectorAll('[id^="product-name-"]');
-                                fallbackNames.forEach(p => { items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: '' }); });
-                            } else {
-                                productNames.forEach(p => {
-                                    let imgUrl = '';
-                                    const card = p.closest('[data-testid^="product-card-"]');
-                                    if (card) {
-                                        const img = card.querySelector('img');
-                                        if (img) imgUrl = img.src;
-                                    }
-                                    items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: imgUrl });
-                                });
-                            }
-
-                            if (items.length > 0) {
-                                ifoodOrderDetails = {
-                                    id: 'IFOOD-DETALHADO',
-                                    statusNativo: 'WAITING',
-                                    createdAt: new Date().toISOString(),
-                                    isExpress: true,
-                                    carrier: prazo,
-                                    deliveryType: 'EXPRESS',
-                                    customerName: 'App Separador iFood',
-                                    items: items
-                                };
-                            }
-                        }
-                    } catch (e) { }
-                    GM_setValue('ifoodOrderDetails', ifoodOrderDetails ? JSON.stringify(ifoodOrderDetails) : null);
-
-                } catch (e) {
-                    console.error("Erro no monitor iFood (parsing):", e);
-                }
-                GM_setValue('ifoodPendingOrders', newOrdersCount);
-                GM_setValue('ifoodAguardandoColeta', aguardandoColetaCount);
-                GM_setValue('ifoodLastUpdate', Date.now());
-                GM_setValue('ifoodLoggedIn', isLoggedIn);
-            }, 3000);
-            console.log("Monitor iFood rodando silenciosamente para alimentar o Painel TV OMS...");
-            return; // Impede execução do código OMS na aba do iFood
-        }
-
-
-
-        // --- INTEGRAÇÃO DIRETA COM PORTAL RAPPI ---
-        if (window.location.hostname.includes('rappi.com')) {
-            setInterval(() => {
-                let isLoggedIn = true;
-                let newOrdersCount = 0;
-                let aguardandoColetaCount = 0;
-                try {
-                    if (document.querySelector('input[type="password"]')) {
-                        isLoggedIn = false;
-                    } else {
-                        // Verifica quantos cartões de pedido existem na tela
-                        const cards = document.querySelectorAll('app-kind-order .order-card, app-kind-order .order-item, app-order-card, .order-card-container');
-                        newOrdersCount = cards.length;
-
-                        try {
-                            const tabs = Array.from(document.querySelectorAll('a, button, div.tab, span'));
-                            const prontoTab = tabs.find(el => {
-                                const t = el.textContent ? el.textContent.trim().toLowerCase() : '';
-                                return t.includes('pronto') || t.includes('entregador') || t.includes('coleta');
-                            });
-                            if (prontoTab) {
-                                const val = parseInt(prontoTab.textContent.replace(/[^0-9]/g, ''), 10);
-                                if (!isNaN(val)) aguardandoColetaCount = val;
-                            }
-                        } catch (e) { }
-                    }
-                } catch (e) {
-                    console.error("Erro no monitor Rappi (parsing):", e);
-                }
-                GM_setValue('rappiPendingOrders', newOrdersCount);
-                GM_setValue('rappiAguardandoColeta', aguardandoColetaCount);
-                GM_setValue('rappiLastUpdate', Date.now());
-                GM_setValue('rappiLoggedIn', isLoggedIn);
-            }, 3000);
-            console.log("Monitor Rappi rodando silenciosamente para alimentar o Painel TV OMS...");
-            return; // Impede execução do código OMS na aba do Rappi
-        }
-
-
-
         // Importar Fonte Premium Outfit
         const fontLink = document.createElement('link');
         fontLink.rel = 'stylesheet';
-        fontLink.href = 'https://fonts.googleapis.com/css2?family=Lilita+One&display=swap';
+        fontLink.href = 'https://fonts.googleapis.com/css2?family=Lilita+One&family=Outfit:wght@400;600;700;800;900&family=JetBrains+Mono:wght@700;800&display=swap';
         document.head.appendChild(fontLink);
 
         // --- CONFIGURAÇÕES ---
@@ -331,12 +156,10 @@
             }
         }
 
+        // 🚨 Som de Alerta Crítico (Sirene para Lista de Despacho / Emergências)
         function playSiren() {
-            // Alarme de emergência com volume máximo e padrão intermitente
             const volume = 1.0;
             const duracao = 0.15;
-
-            // Sequência de tons agudos em padrão de alarme
             playBeep(1000, duracao, volume);
             setTimeout(() => playBeep(1200, duracao, volume), 100);
             setTimeout(() => playBeep(1400, duracao, volume), 200);
@@ -346,34 +169,68 @@
             setTimeout(() => playBeep(1600, 0.2, volume), 600);
         }
 
-        function playNotificationChime() {
+        // 🔔 Som de Novo Pedido (Alerta Chamativo Duplo Ping Ascendente)
+        function playNewOrderAlert() {
             if (!audioCtx) initAudio();
             if (!audioCtx || audioCtx.state === 'suspended') return;
 
             try {
                 const now = audioCtx.currentTime;
-                // Lindo acorde arpejado suave e ascendente de Dó Maior (C5 -> E5 -> G5)
-                const freqs = [523.25, 659.25, 783.99];
+                // Acorde marcante e alegre para chamar atenção imediata
+                const freqs = [783.99, 1046.50, 1318.51];
                 freqs.forEach((freq, index) => {
                     const osc = audioCtx.createOscillator();
                     const gain = audioCtx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, now + (index * 0.09));
 
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(freq, now + (index * 0.05));
-
-                    gain.gain.setValueAtTime(0.0, now + (index * 0.05));
-                    gain.gain.linearRampToValueAtTime(0.08, now + (index * 0.05) + 0.02);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + (index * 0.05) + 0.35);
+                    gain.gain.setValueAtTime(0.0, now + (index * 0.09));
+                    gain.gain.linearRampToValueAtTime(0.18, now + (index * 0.09) + 0.03);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + (index * 0.09) + 0.5);
 
                     osc.connect(gain);
                     gain.connect(audioCtx.destination);
 
-                    osc.start(now + (index * 0.05));
-                    osc.stop(now + (index * 0.05) + 0.4);
+                    osc.start(now + (index * 0.09));
+                    osc.stop(now + (index * 0.09) + 0.55);
                 });
             } catch (e) {
-                console.error("Erro ao emitir chime de notificação:", e);
+                console.error("Erro ao emitir alerta de novo pedido:", e);
             }
+        }
+
+        // ⏳ Som de Lembrete Intermitente (Sutil Duplo Bip de Relembrete de Pendências)
+        function playPendingReminderSound() {
+            if (!audioCtx) initAudio();
+            if (!audioCtx || audioCtx.state === 'suspended') return;
+
+            try {
+                const now = audioCtx.currentTime;
+                // Bip duplo suave para relembrar que há pendências sem assustar
+                [0, 0.16].forEach((delay) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(880, now + delay);
+
+                    gain.gain.setValueAtTime(0.0, now + delay);
+                    gain.gain.linearRampToValueAtTime(0.08, now + delay + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.12);
+
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+
+                    osc.start(now + delay);
+                    osc.stop(now + delay + 0.15);
+                });
+            } catch (e) {
+                console.error("Erro ao emitir lembrete de pendências:", e);
+            }
+        }
+
+        // Mantido para compatibilidade
+        function playNotificationChime() {
+            playNewOrderAlert();
         }
 
         // --- DESIGN SYSTEM PREMIUM PARA TV (MODO TV EM TELA CHEIA) ---
@@ -385,9 +242,12 @@
         	--neon-red: #ff3e3e;
         	--neon-orange: #ff9f43;
         	--neon-blue: #00d2ff;
-        	--bg-dark-tv: #0b0b0f;
-        	--card-bg-tv: rgba(20, 20, 25, 0.95);
-        	--font-main: 'Lilita One', cursive;
+        	--bg-dark-tv: #080c14;
+        	--card-bg-tv: rgba(15, 23, 42, 0.95);
+        	--font-display: 'Lilita One', cursive;
+        	--font-body: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        	--font-mono: 'JetBrains Mono', 'Courier New', monospace;
+        	--font-main: var(--font-body);
     	}
 
     	/* Container Principal do Modo TV */
@@ -428,6 +288,18 @@
     	@keyframes spin {
         	0% { transform: rotate(0deg); }
         	100% { transform: rotate(360deg); }
+    	}
+    	@keyframes slideInCard {
+        	from { opacity: 0; transform: translateY(12px); }
+        	to { opacity: 1; transform: translateY(0); }
+    	}
+    	@keyframes accordionExpand {
+        	from { opacity: 0; transform: scaleY(0.92); transform-origin: top; }
+        	to { opacity: 1; transform: scaleY(1); transform-origin: top; }
+    	}
+    	@keyframes badgeGlowPulse {
+        	0%, 100% { transform: scale(1); opacity: 1; }
+        	50% { transform: scale(1.04); opacity: 0.85; }
     	}
 
     	/* Top Header do Painel */
@@ -624,10 +496,10 @@
         	transition: all 0.3s ease;
     	}
 
-    	/* Cores dos Cards e Pulsações */
-    	.tv-card-green { border-color: var(--neon-green) !important; animation: pulseGreenGlow 2.5s infinite; }
-    	.tv-card-orange { border-color: var(--neon-orange) !important; animation: pulseYellowGlow 1.8s infinite; }
-    	.tv-card-red { border-color: var(--neon-red) !important; animation: pulseRedGlow 1s infinite; }
+    	/* Cores dos Cards e Sombras Neon Sólidas (Flicker-Free) */
+    	.tv-card-green { border-color: var(--neon-green) !important; box-shadow: 0 4px 20px rgba(0, 255, 136, 0.15) !important; }
+    	.tv-card-orange { border-color: var(--neon-yellow) !important; box-shadow: 0 4px 20px rgba(241, 196, 15, 0.15) !important; }
+    	.tv-card-red { border-color: var(--neon-red) !important; box-shadow: 0 4px 20px rgba(255, 62, 62, 0.25) !important; }
 
     	/* Estrutura interna dos Cards gigantes */
     	.tv-card-row {
@@ -1099,29 +971,29 @@
         // Botão para alternar entre os Modos (TV, Apoio, Nativo)
         const toggleStyle = document.createElement('style');
         toggleStyle.innerHTML = `
-    	/* Status das Integrações */
+    	/* Status das Integrações (Empilhado no Lado Direito da Barra Superior) */
     	.tv-integrations-status {
-        	position: fixed;
-        	bottom: 30px;
-        	left: 30px;
         	display: flex;
-        	gap: 12px;
+        	flex-direction: column;
+        	align-items: flex-end;
+        	gap: 6px;
         	z-index: 250000;
     	}
     	.integration-pill {
         	display: flex;
         	align-items: center;
         	gap: 8px;
-        	background: rgba(10, 15, 30, 0.8);
-        	border: 1px solid rgba(255, 255, 255, 0.1);
-        	padding: 8px 16px;
-        	border-radius: 30px;
-        	font-size: 14px;
-        	font-weight: 900;
-        	color: #fff;
-        	letter-spacing: 1px;
-        	backdrop-filter: blur(5px);
-        	box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        	background: rgba(15, 23, 42, 0.75);
+        	border: 1px solid rgba(255, 255, 255, 0.12);
+        	padding: 5px 14px;
+        	border-radius: 20px;
+        	font-size: 13px;
+        	font-weight: 800;
+        	font-family: var(--font-body);
+        	color: #ffffff;
+        	letter-spacing: 0.5px;
+        	backdrop-filter: blur(8px);
+        	box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         	transition: all 0.3s ease;
     	}
     	.status-dot {
@@ -1299,21 +1171,25 @@
             const startTime = getAdjustedStartTime(createdAt);
 
             if (now < startTime) {
-                return { minutes: 999, text: "🕒 AGUARDA ABERTURA", cardClass: "tv-card-green", urgency: 1, textClass: "time-green" };
+                return { minutes: 999, text: "🕒 AGUARDA ABERTURA", cardClass: "tv-card-green", urgency: 1, textClass: "time-green", isExpired: false };
             }
 
             const limit = new Date(startTime.getTime() + (TEMPO_LIMITE_MINUTOS * 60 * 1000));
             const diff = limit - now;
-            const absDiff = Math.abs(diff);
-            const mins = Math.floor(absDiff / 60000);
-            const secs = Math.floor((absDiff % 60000) / 1000);
+
+            // Se o SLA estourou (diff <= 0), clampa o contador em 00:00 e marca como expirado
+            if (diff <= 0) {
+                return { minutes: 0, text: "🚨 ESTOURADO! 00:00", cardClass: "tv-card-red", urgency: 3, textClass: "time-red", isExpired: true };
+            }
+
+            const mins = Math.floor(diff / 60000);
+            const secs = Math.floor((diff % 60000) / 1000);
             const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 
-            if (diff < 0) return { minutes: -mins, text: `🚨 ESTOURADO! -${timeStr}`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red" };
-            if (isExpress || mins < 15) return { minutes: mins, text: `🔥 CRÍTICO: ${timeStr}`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red" };
-            if (mins < 40) return { minutes: mins, text: `⏳ ATENÇÃO: ${timeStr}`, cardClass: "tv-card-orange", urgency: 2, textClass: "time-orange" };
+            if (isExpress || mins < 15) return { minutes: mins, text: `🔥 CRÍTICO: ${timeStr}`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red", isExpired: false };
+            if (mins < 40) return { minutes: mins, text: `⏳ ATENÇÃO: ${timeStr}`, cardClass: "tv-card-orange", urgency: 2, textClass: "time-orange", isExpired: false };
 
-            return { minutes: mins, text: `✅ SEGURO: ${timeStr}`, cardClass: "tv-card-green", urgency: 1, textClass: "time-green" };
+            return { minutes: mins, text: `✅ SEGURO: ${timeStr}`, cardClass: "tv-card-green", urgency: 1, textClass: "time-green", isExpired: false };
         }
 
         // --- IDENTIFICAÇÃO DE GARGALOS E ATRASOS GLOBAIS ---
@@ -1425,8 +1301,13 @@
             }
 
             // Agrupamento para pipeline horizontal superior e monitor de Apoio
-            const counts = { WAITING: 0, PICKING: 0, INVOICING: 0, CHECKED: 0, SEND_READY: 0, PICKUP_READY: 0 };
+            const counts = { WAITING: 0, PICKING: 0, INVOICING: 0, CHECKED: 0, SEND_READY: 0, PICKUP_READY: 0, OVERDUE: 0 };
             list.forEach(o => {
+                const sla = getSLAInfo(o.createdAt, o.isExpress);
+                if (sla.isExpired && ['WAITING', 'PICKING'].includes(o.statusNativo)) {
+                    counts.OVERDUE++;
+                }
+
                 if (o.statusNativo === 'INVOICING_FAIL') counts.INVOICING++;
                 else if (o.statusNativo === 'PICKUP_READY' || o.statusNativo === 'PICKUP_PAID') counts.PICKUP_READY++;
                 else if (counts[o.statusNativo] !== undefined) counts[o.statusNativo]++;
@@ -1513,11 +1394,13 @@
                 discoveryTimes = {};
             }
 
-            const newOrdersInHighlight = list.filter(o =>
-                o.statusNativo === 'WAITING' &&
-                discoveryTimes[o.id] &&
-                (Date.now() - discoveryTimes[o.id]) < ((o.id.includes('IFOOD') || o.id.includes('RAPPI')) ? 10000 : 30000)
-            );
+            const newOrdersInHighlight = list.filter(o => {
+                const sla = getSLAInfo(o.createdAt, o.isExpress);
+                return o.statusNativo === 'WAITING' &&
+                    !sla.isExpired &&
+                    discoveryTimes[o.id] &&
+                    (Date.now() - discoveryTimes[o.id]) < ((o.id.includes('IFOOD') || o.id.includes('RAPPI')) ? 10000 : 30000);
+            });
 
             let activeHighlightOrder = null;
             let elapsedMs = 0;
@@ -1550,8 +1433,11 @@
                 percent = (remainingMs / 30000) * 100;
                 isRotation = false;
             } else {
-                // Sem novos pedidos nos últimos 30s: Rotacionar entre todas as pendências da lista
-                const rotationCandidates = [...pedidosPendentes, ...gargalos];
+                // Sem novos pedidos nos últimos 30s: Rotacionar APENAS entre pendências ativas DENTRO do prazo (exclui pré-vendas atrasadas)
+                const rotationCandidates = [...pedidosPendentes, ...gargalos].filter(o => {
+                    const sla = getSLAInfo(o.createdAt, o.isExpress);
+                    return !sla.isExpired;
+                });
                 if (rotationCandidates.length > 0) {
                     const nowMs = Date.now();
                     if (lastRotationTime === 0) {
@@ -1745,76 +1631,94 @@
                         const tipoColor = deliveryInfo.isPickup ? 'var(--neon-yellow)' : 'var(--neon-blue)';
                         const statusColor = isAtrasado ? 'var(--neon-red)' : 'var(--neon-green)';
 
+                        // Definir cor intuitiva de prioridade do SLA (60 min)
+                        let slaPriorityColor = 'var(--neon-green)';
+                        let slaGlowColor = 'rgba(0, 255, 136, 0.4)';
+                        if (orderSla.urgency === 3 || isAtrasado) {
+                            slaPriorityColor = 'var(--neon-red)';
+                            slaGlowColor = 'rgba(255, 62, 62, 0.6)';
+                        } else if (orderSla.urgency === 2) {
+                            slaPriorityColor = 'var(--neon-yellow)';
+                            slaGlowColor = 'rgba(241, 196, 15, 0.5)';
+                        }
+
                         modalEl.innerHTML = `
-                	<div style="display: flex; height: 100%; width: 100%; background: radial-gradient(circle, rgba(11,11,15,0.95) 0%, rgba(20,20,30,0.95) 100%); overflow: hidden; font-family: 'Lilita One', cursive; border-radius: 12px; box-sizing: border-box;">
-                    	<!-- Lado Esquerdo: Produto -->
-                    	<div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; position: relative;">
-                        	<div style="position: absolute; top: 30px; left: 40px; font-size: 50px; color: rgba(255,255,255,0.1); white-space: nowrap; font-weight: 900; text-transform: uppercase;">
-                            	ITEM ${activeOrderItemIndex + 1} DE ${apiItemsList.length}
+                	<div style="display: flex; height: 100%; width: 100%; background: radial-gradient(circle at 30% 30%, #0f172a 0%, #080c14 100%); overflow: hidden; font-family: 'Lilita One', cursive; border-radius: 20px; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.08);">
+                    	<!-- Lado Esquerdo: Produto & Identificadores (Foco Principal) -->
+                    	<div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 35px 40px; position: relative;">
+                        	<div style="position: absolute; top: 25px; left: 35px; font-size: 14px; color: rgba(255,255,255,0.4); font-family: system-ui, sans-serif; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;">
+                            	📍 ITEM ${activeOrderItemIndex + 1} DE ${apiItemsList.length}
                         	</div>
 
-                        	<!-- Imagem -->
-                        	<div style="height: 40vh; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; width: 100%;">
+                        	<!-- Contêiner de Imagem de Alta Nitidez -->
+                        	<div style="height: 42vh; margin-top: 30px; margin-bottom: 15px; display: flex; align-items: center; justify-content: center; width: 100%; background: #0b1120; border: 2px solid rgba(255, 255, 255, 0.1); border-radius: 24px; padding: 20px; box-sizing: border-box; box-shadow: inset 0 0 30px rgba(0,0,0,0.8);">
                             	${imgUrl
-                                ? `<img src="${imgUrl}" style="max-height: 100%; max-width: 100%; object-fit: contain; filter: drop-shadow(0 20px 30px rgba(0,0,0,0.5)); border-radius: 20px; z-index: 2;">`
-                                : `<div style="font-size: 100px; filter: grayscale(1);">🧸</div>`
+                                ? `<img src="${imgUrl}" style="max-height: 100%; max-width: 100%; object-fit: contain; image-rendering: -webkit-optimize-contrast; border-radius: 12px; z-index: 2;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
+                                : ''
                             }
+                            	<div style="font-size: 110px; display: ${imgUrl ? 'none' : 'flex'}; align-items: center; justify-content: center; opacity: 0.8;">🧸</div>
                         	</div>
 
-                        	<div style="font-size: 40px; color: #fff; text-align: center; max-width: 90%; line-height: 1.1; margin-bottom: 30px; z-index: 2; text-shadow: 0 4px 10px rgba(0,0,0,0.5); font-family: sans-serif; font-weight: bold;">
+                        	<!-- Nome do Produto com Tipografia Limpa e Legível -->
+                        	<div style="font-size: 36px; color: #ffffff; text-align: center; max-width: 95%; line-height: 1.25; margin-bottom: 20px; z-index: 2; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 800; text-shadow: 0 2px 10px rgba(0,0,0,0.8);">
                             	${item.name || 'Produto sem nome'}
                         	</div>
 
-                        	<div style="display: flex; gap: 20px; justify-content: center; width: 100%; z-index: 2;">
-                            	<div style="background: rgba(100, 180, 255, 0.1); padding: 15px 30px; border-radius: 15px; font-family: monospace; font-size: 36px; font-weight: 900; color: #aae9ff; border: 2px solid rgba(100, 180, 255, 0.3); letter-spacing: 2px; text-shadow: 0 0 10px rgba(100,180,255,0.3);">
+                        	<!-- Badges dos Códigos Identificadores (SAP / EAN / QTD) -->
+                        	<div style="display: flex; gap: 20px; justify-content: center; width: 100%; z-index: 2; flex-wrap: wrap;">
+                            	<div style="background: rgba(14, 165, 233, 0.12); padding: 14px 28px; border-radius: 16px; font-family: 'Courier New', Courier, monospace; font-size: 32px; font-weight: 900; color: #38bdf8; border: 2px solid #0ea5e9; letter-spacing: 2px; box-shadow: 0 0 15px rgba(14, 165, 233, 0.2);">
                                 	SAP: ${item.sku || '---'}
                             	</div>
-                            	<div style="background: rgba(255, 220, 100, 0.1); padding: 15px 30px; border-radius: 15px; font-family: monospace; font-size: 36px; font-weight: 900; color: #ffe6aa; border: 2px solid rgba(255, 220, 100, 0.3); letter-spacing: 2px; text-shadow: 0 0 10px rgba(255,220,100,0.3);">
+                            	<div style="background: rgba(245, 158, 11, 0.12); padding: 14px 28px; border-radius: 16px; font-family: 'Courier New', Courier, monospace; font-size: 32px; font-weight: 900; color: #fbbf24; border: 2px solid #f59e0b; letter-spacing: 2px; box-shadow: 0 0 15px rgba(245, 158, 11, 0.2);">
                                 	EAN: ${item.ean || '---'}
                             	</div>
-                            	<div style="${qtyBadgeStyle} padding: 15px 30px; border-radius: 15px; font-size: 36px; font-weight: 900; letter-spacing: 2px;">
+                            	<div style="${qtyBadgeStyle} padding: 14px 28px; border-radius: 16px; font-size: 32px; font-weight: 900; letter-spacing: 2px;">
                                 	${qtyText}
                             	</div>
                         	</div>
                     	</div>
 
-                    	<!-- Lado Direito: Resumo do Pedido -->
-                    	<div style="width: 350px; background: rgba(0,0,0,0.4); border-left: 2px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 40px 20px; box-sizing: border-box;">
+                    	<!-- Lado Direito: Painel SLA (Hero Metric) e Resumo Operacional -->
+                    	<div style="width: 380px; background: rgba(8, 12, 20, 0.85); border-left: 2px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 35px 25px; box-sizing: border-box;">
 
+                        	<!-- Topo Lado Direito: Canal & Status -->
                         	<div style="text-align: center; width: 100%;">
-                            	<div style="font-size: 20px; font-weight: 900; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">${modalTitle}</div>
-                            	<div style="font-size: 36px; font-weight: 900; color: ${tipoColor}; text-shadow: 0 0 20px ${tipoColor}40; line-height: 1.1; margin-bottom: 20px; word-break: break-word;">${tipoText}</div>
+                            	<div style="font-size: 14px; font-weight: 900; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px;">${modalTitle}</div>
+                            	<div style="font-size: 32px; font-weight: 900; color: ${tipoColor}; text-shadow: 0 0 20px ${tipoColor}40; line-height: 1.1; margin-bottom: 15px; word-break: break-word;">${tipoText}</div>
 
-                            	<div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 30px; width: 100%; box-sizing: border-box;">
-                                	<div style="font-size: 16px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Pedido OMS</div>
-                                	<div style="font-size: 32px; color: #fff; font-weight: 900; word-break: break-all; line-height: 1.1;">#${activeHighlightOrder.id}</div>
+                            	<div style="font-size: 14px; font-weight: 900; color: ${statusColor}; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; background: ${statusColor}15; padding: 10px; border-radius: 10px; border: 1px solid ${statusColor}40; display: inline-block; width: 80%;">
+                                	STATUS: ${statusText}
                             	</div>
                         	</div>
 
+                        	<!-- Centro Lado Direito: CRONÔMETRO SLA (60 MIN) HERO METRIC -->
+                        	<div style="text-align: center; width: 100%; background: rgba(15, 23, 42, 0.8); padding: 25px 15px; border-radius: 20px; border: 2px solid ${slaPriorityColor}; box-shadow: 0 0 30px ${slaGlowColor}; margin: 15px 0;">
+                            	<div style="font-size: 13px; color: rgba(255,255,255,0.6); text-transform: uppercase; letter-spacing: 2px; font-weight: 900; margin-bottom: 8px; font-family: system-ui, sans-serif;">
+                                	⏱️ PRAZO SLA (60 MIN)
+                            	</div>
+                            	<div id="modal-sla-time" style="font-size: 54px; font-weight: 900; color: ${slaPriorityColor}; text-shadow: 0 0 25px ${slaGlowColor}; line-height: 1; font-family: 'Lilita One', cursive;">
+                                	${orderSla.text.split(' ').pop()}
+                            	</div>
+                        	</div>
+
+                        	<!-- Rodapé Lado Direito: Barra de Progresso & Número do Pedido Despriorizado -->
                         	<div style="text-align: center; width: 100%;">
-                            	<div style="font-size: 18px; font-weight: 900; color: ${statusColor}; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; background: ${statusColor}20; padding: 10px; border-radius: 10px; border: 1px solid ${statusColor}40;">
-                                	STATUS: ${statusText}
-                            	</div>
-
-                            	<!-- Cronômetro SLA Original -->
-                            	<div style="margin-bottom: 30px;">
-                                	<div style="font-size: 14px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">SLA do Pedido</div>
-                                	<div id="modal-sla-time" style="font-size: 50px; font-weight: 900; color: ${isAtrasado ? 'var(--neon-red)' : '#fff'}; text-shadow: 0 0 20px ${isAtrasado ? 'rgba(255,0,0,0.5)' : 'rgba(255,255,255,0.2)'}; line-height: 1;">
-                                    	${orderSla.text.split(' ').pop()}
-                                	</div>
-                            	</div>
-
-                            	<!-- Barra de Progresso de Alerta -->
-                            	<div style="background: rgba(255,255,255,0.03); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.05); width: 100%; box-sizing: border-box;">
-                                	<div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 800; color: rgba(255,255,255,0.4); margin-bottom: 10px;">
+                            	<!-- Barra de Tempo de Exibição Tela -->
+                            	<div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.06); width: 100%; box-sizing: border-box; margin-bottom: 20px;">
+                                	<div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.4); margin-bottom: 8px;">
                                     	<span>${subSlaTitle}</span>
                                 	</div>
-                                	<div style="font-size: 30px; font-weight: 900; color: #fff; margin-bottom: 15px;" id="oms-new-order-countdown-text">
+                                	<div style="font-size: 24px; font-weight: 900; color: #fff; margin-bottom: 10px;" id="oms-new-order-countdown-text">
                                     	${countdownLabel} ${Math.ceil(remainingMs / 1000)}s
                                 	</div>
-                                	<div style="background: rgba(255,255,255,0.1); border-radius: 8px; height: 10px; overflow: hidden; width: 100%;">
-                                    	<div id="oms-new-order-progress-bar" style="background: ${themeColor}; height: 100%; width: ${percent}%; box-shadow: 0 0 15px ${themeColor}; transition: width 0.2s linear;"></div>
+                                	<div style="background: rgba(255,255,255,0.1); border-radius: 6px; height: 8px; overflow: hidden; width: 100%;">
+                                    	<div id="oms-new-order-progress-bar" style="background: ${themeColor}; height: 100%; width: ${percent}%; box-shadow: 0 0 12px ${themeColor}; transition: width 0.2s linear;"></div>
                                 	</div>
+                            	</div>
+
+                            	<!-- Número do Pedido OMS (Despriorizado / Discreto) -->
+                            	<div style="font-size: 12px; color: rgba(255,255,255,0.35); font-family: monospace; font-weight: 700; letter-spacing: 1px;">
+                                	Pedido OMS #${activeHighlightOrder.id}
                             	</div>
                         	</div>
                     	</div>
@@ -1912,6 +1816,17 @@
             	`;
             }
 
+            // Determinar qual pedido estourado (>60m) será auto-expandido de forma mãos-livres no monitor (rotaciona a cada 5 segundos)
+            const overdueOrders = visibleOrders.filter(o => {
+                const sla = getSLAInfo(o.createdAt, o.isExpress);
+                return sla.isExpired && ['WAITING', 'PICKING'].includes(o.statusNativo);
+            });
+            let autoExpandedOverdueId = null;
+            if (overdueOrders.length > 0) {
+                const overdueIndex = Math.floor(Date.now() / 5000) % overdueOrders.length;
+                autoExpandedOverdueId = overdueOrders[overdueIndex].id;
+            }
+
             tvDashboard.innerHTML = `
         	${isListEmpty ? emptyStateHtml : `
             	<div style="padding: 20px; flex-shrink: 0; padding-bottom: 0;">
@@ -1920,29 +1835,37 @@
             	</div>
 
             	<!-- Top Header Consolidado -->
-            	<div class="tv-header" style="justify-content: center; padding: 20px 40px; border-bottom: 2px solid rgba(255,255,255,0.05); background: rgba(0,0,0,0.5); display: flex; gap: 40px; align-items: center;">
-                	<!-- Card de Fluxo Operacional Consolidado -->
-                	<div style="display: flex; gap: 40px; background: rgba(255,255,255,0.03); padding: 15px 40px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
+            	<div class="tv-header" style="justify-content: space-between; padding: 16px 35px; border-bottom: 2px solid rgba(255,255,255,0.06); background: rgba(8, 12, 20, 0.7); display: flex; align-items: center;">
+                	<!-- Esquerda: Card de Fluxo Operacional Consolidado -->
+                	<div style="display: flex; gap: 28px; background: rgba(255,255,255,0.03); padding: 12px 30px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
                     	<div style="text-align: center;">
-                        	<div style="font-size: 16px; color: var(--neon-yellow); font-weight: 900; text-transform: uppercase; letter-spacing: 1px;">Separando</div>
-                        	<div style="font-size: 45px; color: var(--neon-yellow); font-weight: 900; line-height: 1.1;">${counts.PICKING}</div>
+                        	<div style="font-size: 12px; color: var(--neon-yellow); font-weight: 900; text-transform: uppercase; letter-spacing: 1px; font-family: var(--font-body);">Separando</div>
+                        	<div style="font-size: 38px; color: var(--neon-yellow); font-weight: 900; line-height: 1; font-family: var(--font-display);">${counts.PICKING}</div>
                     	</div>
-                    	<div style="width: 2px; background: rgba(255,255,255,0.1);"></div>
+                    	<div style="width: 1px; background: rgba(255,255,255,0.1);"></div>
                     	<div style="text-align: center;">
-                        	<div style="font-size: 16px; color: var(--neon-blue); font-weight: 900; text-transform: uppercase; letter-spacing: 1px;">Faturando</div>
-                        	<div style="font-size: 45px; color: var(--neon-blue); font-weight: 900; line-height: 1.1;">${counts.INVOICING}</div>
+                        	<div style="font-size: 12px; color: var(--neon-blue); font-weight: 900; text-transform: uppercase; letter-spacing: 1px; font-family: var(--font-body);">Faturando</div>
+                        	<div style="font-size: 38px; color: var(--neon-blue); font-weight: 900; line-height: 1; font-family: var(--font-display);">${counts.INVOICING}</div>
                     	</div>
-                    	<div style="width: 2px; background: rgba(255,255,255,0.1);"></div>
+                    	<div style="width: 1px; background: rgba(255,255,255,0.1);"></div>
                     	<div style="text-align: center;">
-                        	<div style="font-size: 16px; color: var(--neon-orange); font-weight: 900; text-transform: uppercase; letter-spacing: 1px;">Preparar Entrega</div>
-                        	<div style="font-size: 45px; color: var(--neon-orange); font-weight: 900; line-height: 1.1;">${counts.CHECKED}</div>
+                        	<div style="font-size: 12px; color: var(--neon-orange); font-weight: 900; text-transform: uppercase; letter-spacing: 1px; font-family: var(--font-body);">Preparar Entrega</div>
+                        	<div style="font-size: 38px; color: var(--neon-orange); font-weight: 900; line-height: 1; font-family: var(--font-display);">${counts.CHECKED}</div>
+                    	</div>
+                    	<div style="width: 1px; background: rgba(255,255,255,0.1);"></div>
+                    	<div style="text-align: center;">
+                        	<div style="font-size: 12px; color: var(--neon-red); font-weight: 900; text-transform: uppercase; letter-spacing: 1px; font-family: var(--font-body);">Atrasados (>60m)</div>
+                        	<div style="font-size: 38px; color: var(--neon-red); font-weight: 900; line-height: 1; font-family: var(--font-display);">${counts.OVERDUE}</div>
                     	</div>
                 	</div>
 
-                	<!-- Clock -->
-                	<div class="tv-clock-group" style="display: flex; flex-direction: column; align-items: flex-end;">
-                    	<div class="tv-clock" style="font-size: 55px; line-height: 1; font-weight: 900; color: #fff;">${clockTime}</div>
-                    	<div class="tv-date" style="font-size: 20px; color: rgba(255,255,255,0.6);">${clockDate}</div>
+                	<!-- Direita: Relógio e Integrações Empilhadas na Barra Superior -->
+                	<div style="display: flex; align-items: center; gap: 20px;">
+                    	<div class="tv-clock-group" style="display: flex; flex-direction: column; align-items: flex-end;">
+                        	<div class="tv-clock" style="font-size: 48px; line-height: 1; font-weight: 900; color: #fff; font-family: var(--font-display);">${clockTime}</div>
+                        	<div class="tv-date" style="font-size: 14px; color: rgba(255,255,255,0.5); font-family: var(--font-body); font-weight: 700; margin-top: 3px;">${clockDate}</div>
+                    	</div>
+                    	<div id="tv-header-integrations-slot"></div>
                 	</div>
             	</div>
 
@@ -1967,7 +1890,7 @@
                         	<span class="tv-column-counter" style="background:#000; color:var(--neon-yellow); font-size: 48px; padding: 5px 20px; border-radius: 12px; border: 2px solid var(--neon-yellow);">${retiradas.length}</span>
                     	</div>
                     	<div class="tv-orders-list" id="tv-list-retiradas">
-                        	${retiradas.map(o => renderTVCard(o)).join('')}
+                        	${retiradas.map(o => renderTVCard(o, autoExpandedOverdueId)).join('')}
                     	</div>
                 	</div>
 
@@ -1978,7 +1901,7 @@
                         	<span class="tv-column-counter" style="background:#000; color:var(--neon-blue); font-size: 48px; padding: 5px 20px; border-radius: 12px; border: 2px solid var(--neon-blue);">${entregas.length}</span>
                     	</div>
                     	<div class="tv-orders-list" id="tv-list-entregas">
-                        	${entregas.map(o => renderTVCard(o)).join('')}
+                        	${entregas.map(o => renderTVCard(o, autoExpandedOverdueId)).join('')}
                     	</div>
                 	</div>
             	</div>
@@ -1990,6 +1913,12 @@
         	</div>
     	`;
 
+            // Anexar pílulas de integração empilhadas na barra superior no slot reservado
+            const headerSlot = document.getElementById('tv-header-integrations-slot');
+            if (headerSlot && integrationsUI) {
+                headerSlot.appendChild(integrationsUI);
+            }
+
             // Restaurar posições de rolagem instantaneamente
             const retiradasListElNew = document.getElementById('tv-list-retiradas');
             const entregasListElNew = document.getElementById('tv-list-entregas');
@@ -1998,14 +1927,27 @@
 
             // Tocar alarme de lembrete sonoro se necessário (hands-free alarm loop)
             const now = Date.now();
-            if ((temPendentes || temGargalosGraves) && (now - lastAlarmPlayedTime > ALARM_COOLDOWN)) {
-                playSiren();
-                lastAlarmPlayedTime = now;
+            const pendentesDentroSla = pedidosPendentes.filter(o => {
+                const sla = getSLAInfo(o.createdAt, o.isExpress);
+                return !sla.isExpired;
+            });
+
+            if (now - lastAlarmPlayedTime > ALARM_COOLDOWN) {
+                if (counts.SEND_READY > 0) {
+                    // Alerta Crítico (Lista de Despacho): Sirene de Emergência
+                    playSiren();
+                    lastAlarmPlayedTime = now;
+                } else if (pendentesDentroSla.length > 0) {
+                    // Pendências operacionais no SLA: Lembrete suave intermitente
+                    playPendingReminderSound();
+                    lastAlarmPlayedTime = now;
+                }
+                // Nota: Pedidos atrasados/pré-vendas que estão estourados são mantidos na lista visual, mas NÃO disparam som nem sirene.
             }
         }
 
         // --- RENDERIZADOR DE CARDS PARA TV ---
-        function renderTVCard(o) {
+        function renderTVCard(o, autoExpandedOverdueId) {
             const delivery = parseDeliveryInfo(o);
             const sla = getSLAInfo(o.createdAt, o.isExpress);
             const bottleneck = getBottleneckInfo(o);
@@ -2103,83 +2045,102 @@
         	`;
             }
 
-            const isAtrasado = sla.text.includes('ESTOURADO');
+            const isAtrasado = sla.isExpired || sla.text.includes('ESTOURADO');
             const statusText = isAtrasado ? 'ATRASADO' : 'NOVO';
             const tipoText = isPickupOrder ? 'RETIRADA' : 'ENTREGA';
             const tipoColor = isPickupOrder ? 'var(--neon-yellow)' : 'var(--neon-blue)';
             const statusColor = isAtrasado ? 'var(--neon-red)' : 'var(--neon-green)';
 
+            // Determinar cor de prioridade intuitiva do SLA do card
+            let cardSlaColor = 'var(--neon-green)';
+            if (sla.urgency === 3 || isAtrasado) {
+                cardSlaColor = 'var(--neon-red)';
+            } else if (sla.urgency === 2) {
+                cardSlaColor = 'var(--neon-yellow)';
+            }
+
+            // Regra de Minimização / Expansão:
+            // - Pedidos novos / dentro do prazo de 60m: exibem COMPLETO.
+            // - Pedidos atrasados em separação (>60m): ficam MINIMIZADOS (apenas linha de resumo), e expandem periodicamente de forma mãos-livres.
+            const isAutoExpanded = autoExpandedOverdueId && autoExpandedOverdueId === o.id;
+            const showProductDetails = !isAtrasado || isAutoExpanded;
+
             return `
-        	<div class="tv-order-card ${cardStyleClass}" style="
-            	background: linear-gradient(135deg, rgba(20, 32, 54, 0.95), rgba(13, 22, 38, 0.98)) !important;
+        	<div class="tv-order-card pedido-card ${cardStyleClass} ${isAtrasado && !isAutoExpanded ? 'tv-card-minimized' : ''} ${isAutoExpanded ? 'tv-card-auto-expanded' : ''}" style="
+            	background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(8, 12, 20, 0.98)) !important;
             	border-width: 2px !important;
-            	box-shadow: 0 12px 30px rgba(0,0,0,0.6) !important;
+            	box-shadow: ${isAutoExpanded ? '0 0 25px rgba(241, 196, 15, 0.6)' : '0 12px 30px rgba(0,0,0,0.6)'} !important;
+            	border-radius: 16px !important;
+            	padding: 14px 18px !important;
+            	transition: border-color 0.3s ease, box-shadow 0.3s ease !important;
+                ${isAutoExpanded ? 'border-color: var(--neon-yellow) !important;' : ''}
         	">
-            	<!-- Top Row: NUMERO | TIPO | STATUS | TEMPO -->
-            	<div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); padding: 10px 15px; border-radius: 10px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.05);">
+            	<!-- Top Row (Resumo Minimizado): PRAZO SLA | TIPO | STATUS | PEDIDO OMS -->
+            	<div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.4); padding: 12px 16px; border-radius: 12px; margin-bottom: ${showProductDetails ? '10px' : '0'}; border: 1px solid rgba(255,255,255,0.06);">
                 	<div style="display: flex; flex-direction: column; gap: 2px;">
-                    	<span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">PEDIDO</span>
-                    	<span style="font-size: 18px; font-weight: 900; color: #fff; font-family: 'Lilita One', cursive;">#${o.id}</span>
+                    	<span style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 900; text-transform: uppercase; letter-spacing: 1px;">⏱️ PRAZO SLA</span>
+                    	<span class="prazo-sla" style="font-size: 22px; font-weight: 900; color: ${cardSlaColor}; font-family: var(--font-display); text-shadow: 0 0 10px ${cardSlaColor}50;">${sla.text.split(' ').pop()}</span>
                 	</div>
                 	<div style="display: flex; flex-direction: column; gap: 2px;">
                     	<span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">TIPO</span>
-                    	<span style="font-size: 16px; font-weight: 900; color: ${tipoColor};">${tipoText}</span>
+                    	<span class="tipo" style="font-size: 15px; font-weight: 900; color: ${tipoColor}; font-family: var(--font-body);">${tipoText}</span>
                 	</div>
                 	<div style="display: flex; flex-direction: column; gap: 2px;">
                     	<span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">STATUS</span>
-                    	<span style="font-size: 16px; font-weight: 900; color: ${statusColor};">${statusText}</span>
+                    	<span class="status" style="font-size: 15px; font-weight: 900; color: ${statusColor}; font-family: var(--font-body);">${statusText}</span>
                 	</div>
                 	<div style="display: flex; flex-direction: column; gap: 2px; align-items: flex-end;">
-                    	<span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">TEMPO SEPARAÇÃO</span>
-                    	<span style="font-size: 20px; font-weight: 900; color: ${isAtrasado ? 'var(--neon-red)' : '#fff'}; font-family: 'Lilita One', cursive;">${sla.text.split(' ').pop()}</span>
+                    	<span style="font-size: 10px; color: rgba(255,255,255,0.3); font-weight: 800; text-transform: uppercase;">PEDIDO OMS</span>
+                    	<span class="pedido-oms" style="font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.4); font-family: var(--font-mono);">#${o.id}</span>
                 	</div>
             	</div>
 
             	${bottleneckHtml}
             	${deliveryAppTipHtml}
 
-            	<!-- Product Items Detail List -->
-            	${(() => {
+            	<!-- Product Items Detail List (Exibido se o pedido está no prazo ou se foi auto-expandido periodicamente) -->
+            	${showProductDetails ? (() => {
                     const itemsList = Array.isArray(o.items) ? o.items : [];
                     if (itemsList.length === 0) return '';
                     let itemsHtml = `
                     	<div class="tv-card-items-sublist" style="
                         	display: flex;
                         	flex-direction: column;
-                        	gap: 10px;
-                        	background: rgba(0, 0, 0, 0.25);
-                        	padding: 12px;
-                        	border-radius: 8px;
-                        	margin-top: 5px;
-                        	border: 1px solid rgba(255, 255, 255, 0.04);
+                        	gap: 12px;
+                        	background: rgba(0, 0, 0, 0.35);
+                        	padding: 14px;
+                        	border-radius: 12px;
+                        	margin-top: 6px;
+                        	border: 1px solid rgba(255, 255, 255, 0.05);
                     	">
                 	`;
                     itemsList.forEach((item, index) => {
                         const imgHtml = item.imageUrl
-                            ? `<img src="${item.imageUrl}" style="width: 48px; height: 48px; border-radius: 6px; object-fit: cover; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08);" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />`
+                            ? `<img src="${item.imageUrl}" style="width: 64px; height: 64px; border-radius: 10px; object-fit: contain; image-rendering: -webkit-optimize-contrast; background: #0b1120; border: 1px solid rgba(255, 255, 255, 0.12); flex-shrink: 0;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />`
                             : '';
-                        const fallbackImgHtml = `<div style="width: 48px; height: 48px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); display: ${item.imageUrl ? 'none' : 'flex'}; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">🧸</div>`;
+                        const fallbackImgHtml = `<div style="width: 64px; height: 64px; border-radius: 10px; background: #0b1120; border: 1px solid rgba(255, 255, 255, 0.12); display: ${item.imageUrl ? 'none' : 'flex'}; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0;">🧸</div>`;
 
                         const isLast = index === itemsList.length - 1;
-                        const borderStyle = isLast ? '' : 'border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 10px;';
+                        const borderStyle = isLast ? '' : 'border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;';
 
                         itemsHtml += `
                         	<div style="display: flex; flex-direction: column; gap: 8px; ${borderStyle}">
-                            	<span style="font-size: 14px; font-weight: 800; color: #ffffff; line-height: 1.3;">${item.name}</span>
-                            	<div style="display: flex; align-items: center; gap: 12px;">
+                            	<span class="descricao" style="font-size: 15px; font-weight: 800; color: #ffffff; line-height: 1.3; font-family: var(--font-body);">${item.name}</span>
+                            	<div style="display: flex; align-items: center; gap: 14px;">
                                 	${imgHtml}
                                 	${fallbackImgHtml}
-                                	<div style="display: flex; flex-direction: column; flex: 1;">
-                                    	<span style="font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, 0.5);">SAP: ${item.sku} | EAN: ${item.ean || '---'}</span>
+                                	<div style="display: flex; flex-direction: column; flex: 1; gap: 3px;">
+                                    	<span class="sap" style="font-size: 13px; font-weight: 800; color: #38bdf8; font-family: var(--font-mono);">SAP: ${item.sku}</span>
+                                    	<span class="ean" style="font-size: 13px; font-weight: 800; color: #fbbf24; font-family: var(--font-mono);">EAN: ${item.ean || '---'}</span>
                                 	</div>
-                                	<span style="font-size: 16px; font-weight: 900; color: var(--neon-green); background: rgba(0, 255, 136, 0.08); padding: 4px 12px; border-radius: 6px; border: 1px solid rgba(0, 255, 136, 0.15); flex-shrink: 0;">QTD: ${item.quantity}</span>
+                                	<span class="qtd" style="font-size: 18px; font-weight: 900; color: var(--neon-green); background: rgba(0, 255, 136, 0.12); padding: 6px 14px; border-radius: 8px; border: 1px solid var(--neon-green); flex-shrink: 0; font-family: var(--font-body);">QTD: ${item.quantity}</span>
                             	</div>
                         	</div>
                     	`;
                     });
                     itemsHtml += `</div>`;
                     return itemsHtml;
-                })()}
+                })() : ''}
         	</div>
     	`;
         }

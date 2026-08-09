@@ -1,60 +1,25 @@
 // ==UserScript==
-// @name         Super Monitor iFood - Alerta TV Premium
+// @name         Super Monitor iFood - Coletor OMS (Sem Som)
 // @namespace    http://tampermonkey.net/
-// @version      1.00
-// @description  Monitor de pedidos iFood: Alarme sonoro automático e aviso na tela quando houver novos pedidos.
+// @version      2.10
+// @description  Monitor de pedidos iFood: Coleta em tempo real e sincroniza com o Painel Linx OMS via GM_setValue/GM_getValue. Notificações sonoras executadas exclusivamente no OMS principal.
 // @author       Antigravity AI
+// @match        https://*.ifood.com.br/*
 // @match        https://gestordepedidos.ifood.com.br/*
 // @match        https://merchant.ifood.com.br/*
-// @grant        none
+// @match        https://separador.ifood.com.br/*
+// @grant        GM_setValue
+// @grant        GM_getValue
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     const CHECK_INTERVAL = 3000;
-    const ALARM_COOLDOWN = 15000;
-    
-    let audioCtx = null;
-    let lastAlarmTime = 0;
-    let alarmActive = false;
     let modalElement = null;
 
-    // --- AUDIO SYSTEM ---
-    function initAudio() {
-        if (audioCtx) return;
-        try {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            audioCtx = new AudioContextClass();
-        } catch (e) {
-            console.error("AudioContext não suportado", e);
-        }
-    }
-
-    function playBeep(freq, duration, vol) {
-        if (!audioCtx) initAudio();
-        if (!audioCtx || audioCtx.state === 'suspended') return;
-        try {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-            gain.gain.setValueAtTime(vol || 0.1, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + duration);
-        } catch (e) {}
-    }
-
-    function playSiren() {
-        playBeep(988, 0.2, 0.35); // Si (B5)
-        setTimeout(() => playBeep(1318, 0.25, 0.35), 180); // Mi (E6)
-    }
-
-    // --- UI SYSTEM ---
-    function createPremiumModal() {
+    // --- INTERFACE VISUAL SUTIL NO PORTAL IFOOD (SEM SOM) ---
+    function createVisualModal() {
         if (modalElement) return;
 
         const style = document.createElement('style');
@@ -117,28 +82,10 @@
             }
             
             .ifood-alert-sub {
-                font-size: 24px;
+                font-size: 20px;
                 font-weight: 700;
                 color: rgba(255, 255, 255, 0.7);
                 margin-top: 15px;
-            }
-
-            /* Botão de desbloqueio de áudio */
-            .audio-unlock-btn {
-                position: fixed;
-                bottom: 20px;
-                right: 20px;
-                background: #ea1d2c;
-                color: white;
-                border: none;
-                padding: 15px 30px;
-                border-radius: 30px;
-                font-family: 'Lilita One', cursive;
-                font-weight: 900;
-                font-size: 16px;
-                cursor: pointer;
-                z-index: 9999999;
-                box-shadow: 0 10px 20px rgba(234, 29, 44, 0.4);
             }
         `;
         document.head.appendChild(style);
@@ -148,109 +95,165 @@
         modalElement.innerHTML = `
             <h1 class="ifood-alert-title">🚨 NOVO PEDIDO IFOOD 🚨</h1>
             <div class="ifood-alert-count" id="ifood-new-orders-val">0</div>
-            <div class="ifood-alert-sub">Verifique o gestor imediatamente!</div>
+            <div class="ifood-alert-sub">Sincronizado com o Painel OMS (Som ativo no OMS)</div>
         `;
         document.body.appendChild(modalElement);
-
-        // Adiciona botão para liberar áudio
-        const unlockBtn = document.createElement('button');
-        unlockBtn.className = 'audio-unlock-btn';
-        unlockBtn.innerText = 'ATIVAR ALARME SONORO';
-        unlockBtn.onclick = () => {
-            initAudio();
-            if(audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-            playBeep(800, 0.1, 0.1);
-            unlockBtn.style.display = 'none';
-        };
-        document.body.appendChild(unlockBtn);
-        
-        // Esconder o botão se já estiver rodando liso
-        setTimeout(() => {
-            if(audioCtx && audioCtx.state === 'running') unlockBtn.style.display = 'none';
-        }, 2000);
     }
 
-    // --- CORE LOGIC ---
-    function checkForNewOrders() {
-        let newOrders = 0;
+    // --- LÓGICA PRINCIPAL DE PARSING & SINCRONIZAÇÃO GM_setValue ---
+    function syncAndCheckOrders() {
+        let newOrdersCount = 0;
+        let aguardandoColetaCount = 0;
+        let isLoggedIn = true;
+        let ifoodOrderDetails = null;
 
-        // NOVA LÓGICA DE DETECÇÃO PARA APP SEPARADOR
-        const pedidosLink = document.querySelector('a[href*="/order/latest"]');
-        if (pedidosLink) {
-            const outputEl = pedidosLink.querySelector('output');
-            if (outputEl && outputEl.textContent) {
-                const val = parseInt(outputEl.textContent.trim(), 10);
-                if (!isNaN(val)) newOrders = val;
+        try {
+            if (document.querySelector('input[type="password"]')) {
+                isLoggedIn = false;
             }
-        } else {
-            // Estratégia 1: Pela <output> com aria-label específico (baseado na estrutura informada)
-            const outputByAria = document.querySelector('output[aria-label*="pedidos"]');
-            if (outputByAria && outputByAria.textContent) {
-                const val = parseInt(outputByAria.textContent.trim(), 10);
-                if (!isNaN(val)) newOrders = val;
-            } 
-            
-            // Estratégia 2: Busca por <p> com texto "Pedidos" e acha o <output> irmão
-            if (newOrders === 0) {
-                const pElements = Array.from(document.querySelectorAll('p'));
-                const pedidosP = pElements.find(p => p.textContent.trim().toLowerCase() === 'pedidos');
-                
-                if (pedidosP && pedidosP.parentElement) {
-                    const outputEl = pedidosP.parentElement.querySelector('output');
-                    if (outputEl && outputEl.textContent) {
-                        const val = parseInt(outputEl.textContent.trim(), 10);
-                        if (!isNaN(val)) newOrders = val;
+
+            // 1. Detecção de Novos Pedidos
+            const pedidosLink = document.querySelector('a[href*="/order/latest"]');
+            if (pedidosLink) {
+                const outputEl = pedidosLink.querySelector('output');
+                if (outputEl && outputEl.textContent) {
+                    const val = parseInt(outputEl.textContent.trim(), 10);
+                    if (!isNaN(val)) newOrdersCount = val;
+                }
+            } else {
+                const outputByAria = document.querySelector('output[aria-label*="pedidos"]');
+                if (outputByAria && outputByAria.textContent) {
+                    const val = parseInt(outputByAria.textContent.trim(), 10);
+                    if (!isNaN(val)) newOrdersCount = val;
+                } else {
+                    const pElements = Array.from(document.querySelectorAll('p'));
+                    const pedidosP = pElements.find(p => p.textContent && p.textContent.trim().toLowerCase() === 'pedidos');
+                    if (pedidosP && pedidosP.parentElement) {
+                        const outputEl = pedidosP.parentElement.querySelector('output');
+                        if (outputEl && outputEl.textContent) {
+                            const val = parseInt(outputEl.textContent.trim(), 10);
+                            if (!isNaN(val)) newOrdersCount = val;
+                        }
                     }
                 }
             }
+
+            // 2. Detecção de Pedidos na Expedição / Aguardando Coleta
+            try {
+                const expedicaoLink = document.querySelector('a[href*="/order/expedition"]');
+                if (expedicaoLink) {
+                    const outputEl = expedicaoLink.querySelector('output');
+                    if (outputEl && outputEl.textContent) {
+                        const val = parseInt(outputEl.textContent.replace(/[^0-9]/g, ''), 10);
+                        if (!isNaN(val)) aguardandoColetaCount = val;
+                    }
+                }
+
+                if (aguardandoColetaCount === 0) {
+                    const headers = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, span, div, button'));
+                    const prontoEl = headers.find(el => {
+                        const t = el.textContent ? el.textContent.trim().toLowerCase() : '';
+                        return t === 'prontos' || t === 'pronto' || t === 'aguardando entregador' || t === 'aguardando coleta' || t === 'expedição';
+                    });
+                    if (prontoEl && prontoEl.parentElement) {
+                        const numEl = prontoEl.parentElement.querySelector('output, span.badge, div.badge');
+                        if (numEl && numEl.textContent) {
+                            const val = parseInt(numEl.textContent.replace(/[^0-9]/g, ''), 10);
+                            if (!isNaN(val)) aguardandoColetaCount = val;
+                        } else {
+                            const txt = prontoEl.parentElement.textContent.replace(/[^0-9]/g, '');
+                            if (txt) aguardandoColetaCount = parseInt(txt, 10);
+                        }
+                    }
+                }
+            } catch (e) { }
+
+            // 3. Detalhes de Pedido no App Separador
+            try {
+                const h1s = Array.from(document.querySelectorAll('h1'));
+                const orderH1 = h1s.find(h => h.textContent && h.textContent.includes('IFOOD') && h.textContent.includes('#'));
+                if (orderH1) {
+                    let prazo = "NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO";
+                    const pElements = Array.from(document.querySelectorAll('p'));
+                    const prazoEl = pElements.find(p => p.textContent && (p.textContent.toLowerCase().includes('inicie em') || p.textContent.toLowerCase().includes('separar até')));
+                    if (prazoEl) {
+                        prazo = prazoEl.textContent.trim().toUpperCase();
+                    } else {
+                        const h1Times = h1s.find(h => h.textContent && h.textContent.includes(':'));
+                        if (h1Times) prazo = "INICIE EM " + h1Times.textContent.trim() + " HORAS";
+                    }
+
+                    let items = [];
+                    const productNames = document.querySelectorAll('[data-testid^="product-card-"] p[id^="product-name-"]');
+                    if (productNames.length === 0) {
+                        const fallbackNames = document.querySelectorAll('[id^="product-name-"]');
+                        fallbackNames.forEach(p => { items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: '' }); });
+                    } else {
+                        productNames.forEach(p => {
+                            let imgUrl = '';
+                            const card = p.closest('[data-testid^="product-card-"]');
+                            if (card) {
+                                const img = card.querySelector('img');
+                                if (img) imgUrl = img.src;
+                            }
+                            items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: imgUrl });
+                        });
+                    }
+
+                    if (items.length > 0) {
+                        ifoodOrderDetails = {
+                            id: 'IFOOD-DETALHADO',
+                            statusNativo: 'WAITING',
+                            createdAt: new Date().toISOString(),
+                            isExpress: true,
+                            carrier: prazo,
+                            deliveryType: 'EXPRESS',
+                            customerName: 'App Separador iFood',
+                            items: items
+                        };
+                    }
+                }
+            } catch (e) { }
+
+        } catch (e) {
+            console.error("Erro no monitor iFood (parsing):", e);
         }
 
-        handleOrdersUpdate(newOrders);
+        // Atualização da Ponte GM_setValue (comunicação cross-tab para o OMS Principal)
+        GM_setValue('ifoodPendingOrders', newOrdersCount);
+        GM_setValue('ifoodAguardandoColeta', aguardandoColetaCount);
+        GM_setValue('ifoodLastUpdate', Date.now());
+        GM_setValue('ifoodLoggedIn', isLoggedIn);
+        GM_setValue('ifoodOrderDetails', ifoodOrderDetails ? JSON.stringify(ifoodOrderDetails) : null);
+
+        // Atualização Visual (sem som no iFood)
+        handleLocalUiUpdate(newOrdersCount);
     }
 
-    function handleOrdersUpdate(count) {
-        if (!modalElement) createPremiumModal();
+    function handleLocalUiUpdate(count) {
+        if (!modalElement) createVisualModal();
 
         const countEl = document.getElementById('ifood-new-orders-val');
-        
         if (count > 0) {
-            // Há novos pedidos
-            if (!alarmActive || countEl.innerText !== String(count)) {
-                // Atualiza tela
+            if (countEl.innerText !== String(count)) {
                 countEl.innerText = count;
                 modalElement.classList.add('show');
-                alarmActive = true;
             }
-
-            // Toca a sirene respeitando o cooldown
-            const now = Date.now();
-            if (now - lastAlarmTime > ALARM_COOLDOWN) {
-                playSiren();
-                lastAlarmTime = now;
-            }
-            
-            // Força a aba a piscar/chamar a atenção se possível
             document.title = `🚨 (${count}) NOVO PEDIDO IFOOD!`;
         } else {
-            // Limpo
-            if (alarmActive) {
-                modalElement.classList.remove('show');
-                alarmActive = false;
-                document.title = "Gestor de Pedidos"; // Título padrão genérico
-            }
+            modalElement.classList.remove('show');
+            document.title = "Gestor de Pedidos iFood";
         }
     }
 
-    // --- INITIALIZATION ---
+    // --- INICIALIZAÇÃO ---
     function init() {
-        console.log("🚀 Super Monitor iFood carregado.");
-        createPremiumModal();
-        setInterval(checkForNewOrders, CHECK_INTERVAL);
+        console.log("🚀 Monitor iFood (Silencioso - Coletor de Dados para OMS Principal) iniciado...");
+        createVisualModal();
+        setInterval(syncAndCheckOrders, CHECK_INTERVAL);
+        syncAndCheckOrders();
     }
 
-    // Espera o DOM e carrega
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
