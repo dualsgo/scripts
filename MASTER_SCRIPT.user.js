@@ -1,40 +1,33 @@
-
-
 // ==UserScript==
-// @name         Super Monitor Linx OMS - Versão Acompanhar Operacional
+// @name         Super Monitor Linx OMS - Versão Alerta TV Premium (Firefox)
 // @namespace    http://tampermonkey.net/
 // @version      7.00
-// @description  Monitor de pedidos OMS silencioso para operadores: Reorganização nativa em grid neon de 6 colunas, cronômetros de SLA em tempo real, painel lateral deslizante com detalhes e trava de foco no leitor de código de barras.
+// @description  Monitor de pedidos OMS otimizado para TV: Painel em tela cheia com letras gigantes, atualizações em tempo real das pendências, alarmes insistentes automáticos e visualização operacional 100% hands-free.
 // @author       Antigravity AI
 // @match        https://*.linxoms.com.br/*
+// @match        https://*.ifood.com.br/*
+// @match        https://gestordepedidos.ifood.com.br/*
+// @match        https://merchant.ifood.com.br/*
+// @match        https://separador.ifood.com.br/*
+// @match        https://*.rappi.com/*
+// @match        https://*.rappi.com.br/*
+// @match        https://mitienda.rappi.com.br/*
 // @connect      linxoms.com.br
-// @grant        none
+// @connect      rihappy.com.br
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
-    // Importar Fonte Premium Outfit
-    const fontLink = document.createElement('link');
-    fontLink.rel = 'stylesheet';
-    fontLink.href = 'https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap';
-    document.head.appendChild(fontLink);
-
-    // --- CONFIGURAÇÕES ---
-    let LOJA_ID = '1187'; // ID Padrão/Fallback da loja
-    const CHECK_INTERVAL = 3000; // Sincronização a cada 3 segundos
-    const TEMPO_LIMITE_MINUTOS = 60; // SLA padrão da loja
-
-    // --- ESTADO INTERNO ---
-    let pedidosAtivosAtuais = [];
-    let currentURL = window.location.href;
-    let activeStageKey = null; // Controla qual etapa está expandida no painel lateral
-    let audioCtx = null;
-    let audioMuted = localStorage.getItem('oms_audio_muted') === 'true';
-    let lastWaitingCount = 0;
-    let lastCheckedUrgency = 0;
-    let lastGroupsData = {};
-    let checklistState = JSON.parse(localStorage.getItem('oms_checklist_state')) || {};
+    // Variáveis de controle de ciclo de vida e estado da UI do Monitor
+    let tvDashboard = null;
+    let toggleBtn = null;
+    let integrationsUI = null;
+    let audioOverlay = null;
+    let isCoreInitialized = false;
 
     // --- LEITURA DINÂMICA DO ID DA LOJA ATIVA ---
     function getDynamicStoreId() {
@@ -76,7 +69,25 @@
             }
         }
 
-        // 3. Tentar ler da URL
+        // 3. Tentar ler do objeto de sessão nativo do Linx (window.linx)
+        try {
+            if (window.linx && window.linx.session) {
+                const user = window.linx.session.currentUser;
+                const locId = user && user.currentLocation && user.currentLocation.id;
+                if (locId) return String(locId).trim();
+            }
+        } catch (e) { }
+
+        // 4. Tentar ler do elemento DOM da filial logada (.branch)
+        try {
+            const branchEl = document.querySelector('.branch h2, .branch');
+            if (branchEl && branchEl.textContent) {
+                const match = branchEl.textContent.match(/\b\d{3,5}\b/);
+                if (match) return match[0];
+            }
+        } catch (e) { }
+
+        // 5. Tentar ler da URL
         try {
             const pathSegments = window.location.pathname.split('/');
             for (const segment of pathSegments) {
@@ -84,3611 +95,2500 @@
                     return segment;
                 }
             }
-        } catch (e) {}
+        } catch (e) { }
 
         return null;
     }
 
-    function getStoreSlug() {
-        const parts = window.location.pathname.split('/');
-        return parts[1] || 'rihappy';
-    }
+    function initScriptCore() {
+        // --- INTEGRAÇÃO DIRETA COM PORTAL IFOOD ---
+        if (window.location.href.indexOf('separador.ifood.com.br') !== -1) {
+            setInterval(() => {
+                let newOrdersCount = 0;
+                let aguardandoColetaCount = 0;
+                let isLoggedIn = true;
+                try {
+                    if (document.querySelector('input[type="password"]')) {
+                        isLoggedIn = false;
+                    }
+                    const pedidosLink = document.querySelector('a[href*="/order/latest"]');
+                    if (pedidosLink) {
+                        const outputEl = pedidosLink.querySelector('output');
+                        if (outputEl && outputEl.textContent) {
+                            const val = parseInt(outputEl.textContent.trim(), 10);
+                            if (!isNaN(val)) newOrdersCount = val;
+                        }
+                    } else {
+                        const outputByAria = document.querySelector('output[aria-label*="pedidos"]');
+                        if (outputByAria && outputByAria.textContent) {
+                            const val = parseInt(outputByAria.textContent.trim(), 10);
+                            if (!isNaN(val)) newOrdersCount = val;
+                        } else {
+                            const pElements = Array.from(document.querySelectorAll('p'));
+                            const pedidosP = pElements.find(p => p.textContent && p.textContent.trim().toLowerCase() === 'pedidos');
+                            if (pedidosP && pedidosP.parentElement) {
+                                const outputEl = pedidosP.parentElement.querySelector('output');
+                                if (outputEl && outputEl.textContent) {
+                                    const val = parseInt(outputEl.textContent.trim(), 10);
+                                    if (!isNaN(val)) newOrdersCount = val;
+                                }
+                            }
+                        }
+                    }
 
-    function getOrderDetailsUrl(orderId) {
-        const storeSlug = getStoreSlug();
-        const parts = orderId.split('-');
-        if (parts.length === 2) {
-            return `/${storeSlug}/channels/site/orders/${parts[0]}/fulfillments/${parts[1]}`;
+                    try {
+                        // Tenta pelo link específico do App Separador (Expedição)
+                        const expedicaoLink = document.querySelector('a[href*="/order/expedition"]');
+                        if (expedicaoLink) {
+                            const outputEl = expedicaoLink.querySelector('output');
+                            if (outputEl && outputEl.textContent) {
+                                const val = parseInt(outputEl.textContent.replace(/[^0-9]/g, ''), 10);
+                                if (!isNaN(val)) aguardandoColetaCount = val;
+                            }
+                        }
+
+                        // Se não achou pelo link, tenta pelo texto (Gestor de Pedidos Padrão)
+                        if (aguardandoColetaCount === 0) {
+                            const headers = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, span, div, button'));
+                            const prontoEl = headers.find(el => {
+                                const t = el.textContent ? el.textContent.trim().toLowerCase() : '';
+                                return t === 'prontos' || t === 'pronto' || t === 'aguardando entregador' || t === 'aguardando coleta' || t === 'expedição';
+                            });
+                            if (prontoEl && prontoEl.parentElement) {
+                                const numEl = prontoEl.parentElement.querySelector('output, span.badge, div.badge');
+                                if (numEl && numEl.textContent) {
+                                    const val = parseInt(numEl.textContent.replace(/[^0-9]/g, ''), 10);
+                                    if (!isNaN(val)) aguardandoColetaCount = val;
+                                } else {
+                                    const txt = prontoEl.parentElement.textContent.replace(/[^0-9]/g, '');
+                                    if (txt) aguardandoColetaCount = parseInt(txt, 10);
+                                }
+                            }
+                        }
+                    } catch (e) { }
+
+                    let ifoodOrderDetails = null;
+                    try {
+                        const h1s = Array.from(document.querySelectorAll('h1'));
+                        const orderH1 = h1s.find(h => h.textContent && h.textContent.includes('IFOOD') && h.textContent.includes('#'));
+                        if (orderH1) {
+                            let prazo = "NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO";
+                            const pElements = Array.from(document.querySelectorAll('p'));
+                            const prazoEl = pElements.find(p => p.textContent && (p.textContent.toLowerCase().includes('inicie em') || p.textContent.toLowerCase().includes('separar até')));
+                            if (prazoEl) {
+                                prazo = prazoEl.textContent.trim().toUpperCase();
+                            } else {
+                                const h1Times = h1s.find(h => h.textContent && h.textContent.includes(':'));
+                                if (h1Times) prazo = "INICIE EM " + h1Times.textContent.trim() + " HORAS";
+                            }
+
+                            let items = [];
+                            const productNames = document.querySelectorAll('[data-testid^="product-card-"] p[id^="product-name-"]');
+                            if (productNames.length === 0) {
+                                const fallbackNames = document.querySelectorAll('[id^="product-name-"]');
+                                fallbackNames.forEach(p => { items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: '' }); });
+                            } else {
+                                productNames.forEach(p => {
+                                    let imgUrl = '';
+                                    const card = p.closest('[data-testid^="product-card-"]');
+                                    if (card) {
+                                        const img = card.querySelector('img');
+                                        if (img) imgUrl = img.src;
+                                    }
+                                    items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: imgUrl });
+                                });
+                            }
+
+                            if (items.length > 0) {
+                                ifoodOrderDetails = {
+                                    id: 'IFOOD-DETALHADO',
+                                    statusNativo: 'WAITING',
+                                    createdAt: new Date().toISOString(),
+                                    isExpress: true,
+                                    carrier: prazo,
+                                    deliveryType: 'EXPRESS',
+                                    customerName: 'App Separador iFood',
+                                    items: items
+                                };
+                            }
+                        }
+                    } catch (e) { }
+                    GM_setValue('ifoodOrderDetails', ifoodOrderDetails ? JSON.stringify(ifoodOrderDetails) : null);
+
+                } catch (e) {
+                    console.error("Erro no monitor iFood (parsing):", e);
+                }
+                GM_setValue('ifoodPendingOrders', newOrdersCount);
+                GM_setValue('ifoodAguardandoColeta', aguardandoColetaCount);
+                GM_setValue('ifoodLastUpdate', Date.now());
+                GM_setValue('ifoodLoggedIn', isLoggedIn);
+            }, 3000);
+            console.log("Monitor iFood rodando silenciosamente para alimentar o Painel TV OMS...");
+            return; // Impede execução do código OMS na aba do iFood
         }
-        return `/${storeSlug}/orders/${orderId}/fulfillments/${orderId}`;
-    }
 
-    function getAngularData(row) {
-        try {
-            if (typeof angular === 'undefined') return null;
-            const el = angular.element(row);
-            const scope = el.scope();
-            if (!scope) return null;
 
-            const fulfillment = scope.fulfillment || scope.item?.fulfillmentItem || (scope.item && scope.item.fulfillment);
-            if (!fulfillment) return null;
 
-            const customer = fulfillment.customer || fulfillment.order?.customer;
-            const customerName = customer?.fullName || customer?.name;
+        // --- INTEGRAÇÃO DIRETA COM PORTAL RAPPI ---
+        if (window.location.hostname.includes('rappi.com')) {
+            setInterval(() => {
+                let isLoggedIn = true;
+                let newOrdersCount = 0;
+                let aguardandoColetaCount = 0;
+                try {
+                    if (document.querySelector('input[type="password"]')) {
+                        isLoggedIn = false;
+                    } else {
+                        // Verifica quantos cartões de pedido existem na tela
+                        const cards = document.querySelectorAll('app-kind-order .order-card, app-kind-order .order-item, app-order-card, .order-card-container');
+                        newOrdersCount = cards.length;
 
-            let phone = customer?.phoneMobile || customer?.phone || customer?.mobilePhone || "";
-            if (!phone && Array.isArray(customer?.phones)) {
-                phone = customer.phones[0]?.number || (customer.phones[0]?.ddd ? String(customer.phones[0].ddd) + String(customer.phones[0].number) : "");
+                        try {
+                            const tabs = Array.from(document.querySelectorAll('a, button, div.tab, span'));
+                            const prontoTab = tabs.find(el => {
+                                const t = el.textContent ? el.textContent.trim().toLowerCase() : '';
+                                return t.includes('pronto') || t.includes('entregador') || t.includes('coleta');
+                            });
+                            if (prontoTab) {
+                                const val = parseInt(prontoTab.textContent.replace(/[^0-9]/g, ''), 10);
+                                if (!isNaN(val)) aguardandoColetaCount = val;
+                            }
+                        } catch (e) { }
+                    }
+                } catch (e) {
+                    console.error("Erro no monitor Rappi (parsing):", e);
+                }
+                GM_setValue('rappiPendingOrders', newOrdersCount);
+                GM_setValue('rappiAguardandoColeta', aguardandoColetaCount);
+                GM_setValue('rappiLastUpdate', Date.now());
+                GM_setValue('rappiLoggedIn', isLoggedIn);
+            }, 3000);
+            console.log("Monitor Rappi rodando silenciosamente para alimentar o Painel TV OMS...");
+            return; // Impede execução do código OMS na aba do Rappi
+        }
+
+
+
+        // Importar Fonte Premium Outfit
+        const fontLink = document.createElement('link');
+        fontLink.rel = 'stylesheet';
+        fontLink.href = 'https://fonts.googleapis.com/css2?family=Lilita+One&display=swap';
+        document.head.appendChild(fontLink);
+
+        // --- CONFIGURAÇÕES ---
+        let LOJA_ID = '1187'; // ID Padrão/Fallback da loja
+        const CHECK_INTERVAL = 3000; // Sincronização a cada 3 segundos (tempo real)
+        const ALARM_COOLDOWN = 15000; // Alarme toca a cada 15 segundos se houver pendências
+        const TEMPO_LIMITE_MINUTOS = 60; // SLA padrão da loja
+
+        // --- ESTADO INTERNO ---
+        let pedidosAtivosAtuais = [];
+        let audioCtx = null;
+        let alarmInterval = null;
+        let currentViewMode = 'TV'; // Por padrão, inicia no modo TV fullscreen
+        let lastAlarmPlayedTime = 0;
+        let activeRotationalIndex = 0;
+        let lastRotationTime = 0;
+
+        let activeOrderItemIndex = 0;
+        let lastOrderItemRotationTime = 0;
+
+        // --- LEITURA DINÂMICA DO ID DA LOJA ATIVA ---
+        function getDynamicStoreId() {
+            const keys = ['currentLocation', 'selectedLocation', 'location', 'store', 'current_location', 'selected_location'];
+
+            // 1. Tentar ler do localStorage
+            for (const key of keys) {
+                const val = localStorage.getItem(key);
+                if (val) {
+                    try {
+                        const parsed = JSON.parse(val);
+                        if (parsed && typeof parsed === 'object') {
+                            const storeVal = parsed.id || parsed.code || parsed.locationId || parsed.storeId;
+                            if (storeVal) return String(storeVal).trim();
+                        }
+                    } catch (e) {
+                        if (/^\d+$/.test(val.trim())) {
+                            return val.trim();
+                        }
+                    }
+                }
             }
 
-            return {
-                customerName: customerName ? customerName.trim() : null,
-                phone: phone ? String(phone).replace(/\D/g, '') : null,
-                orderId: fulfillment.orderId || fulfillment.order?.code || null
-            };
-        } catch (e) {
-            console.warn("[OMS Premium] Error reading angular scope:", e);
+            // 2. Tentar ler do sessionStorage
+            for (const key of keys) {
+                const val = sessionStorage.getItem(key);
+                if (val) {
+                    try {
+                        const parsed = JSON.parse(val);
+                        if (parsed && typeof parsed === 'object') {
+                            const storeVal = parsed.id || parsed.code || parsed.locationId || parsed.storeId;
+                            if (storeVal) return String(storeVal).trim();
+                        }
+                    } catch (e) {
+                        if (/^\d+$/.test(val.trim())) {
+                            return val.trim();
+                        }
+                    }
+                }
+            }
+
+            // 3. Tentar ler da URL
+            try {
+                const pathSegments = window.location.pathname.split('/');
+                for (const segment of pathSegments) {
+                    if (/^\d+$/.test(segment) && segment.length >= 3) {
+                        return segment;
+                    }
+                }
+            } catch (e) { }
+
             return null;
         }
-    }
 
-    const STAGE_STEPS = {
-        'WAITING': [
-            'Imprimir Lista de Separação',
-            'Coletar todos os produtos'
-        ],
-        'PICKING': [
-            'Conferir código de barras',
-            'Finalizar a separação'
-        ],
-        'INVOICING': [
-            'Aguardar faturamento automático',
-            'Verificar pendências fiscais'
-        ],
-        'CHECKED': [
-            'Embalar e selar pacotes',
-            'Colar etiqueta ou declaração'
-        ],
-        'SEND_READY_DELIVERY': [
-            'Entregar para transportadora',
-            'Gerar a lista de despacho'
-        ],
-        'SEND_READY_PICKUP': [
-            'Organizar na prateleira física',
-            'Notificar cliente via WhatsApp'
-        ]
-    };
-
-    const STAGES_CONFIG = {
-        'WAITING': { label: 'PENDENTES', icon: '📥', color: '#00ff88', class: 'stage-waiting', selector: '.pending.step-box' },
-        'PICKING': { label: 'SEPARAÇÃO', icon: '🔍', color: '#f1c40f', class: 'stage-picking', selector: '.picking.step-box' },
-        'INVOICING': { label: 'FATURAMENTO', icon: '🧾', color: '#3498db', class: 'stage-invoicing', selector: '.billing.step-box' },
-        'CHECKED': { label: 'PREPARAR ENTREGA', icon: '📦', color: '#e67e22', class: 'stage-preparing', selector: '.preparing.step-box' },
-        'SEND_READY_DELIVERY': { label: 'LISTA DE DESPACHO', icon: '🚚', color: '#9b59b6', class: 'stage-shipping', selector: '.shipping.step-box' },
-        'SEND_READY_PICKUP': { label: 'LISTA DE RETIRADA', icon: '🏪', color: '#ff3e3e', class: 'stage-pickup', selector: '.pickup.step-box' }
-    };
-
-    // --- PARSER DE ENTREGAS ---
-    function parseDeliveryInfo(p) {
-        const carrierText = String(p.carrier || p.domCarrierFallback || '').toLowerCase();
-        const typeText = String(p.deliveryType || '').toLowerCase();
-        const apiType = String(p.apiType || '').toUpperCase();
-
-        const isPickup = apiType === 'PICKUP' || carrierText.includes('retirada') || carrierText.includes('loja') || typeText.includes('retirada') || typeText.includes('loja');
-        const isExpress = carrierText.includes('uber') || typeText.includes('express') || typeText.includes('3 horas');
-
-        if (isPickup) {
-            return { label: '🏪 RETIRADA', isExpress: false, isPickup: true };
+        // --- SISTEMA DE AUDIO (CONTEXT LOCK BYPASS) ---
+        function initAudio() {
+            if (audioCtx) return;
+            try {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContextClass();
+            } catch (e) {
+                console.error("AudioContext não suportado neste navegador", e);
+            }
         }
 
-        let labelName = p.carrier || p.deliveryType || 'ENTREGA';
-        if (carrierText.includes('uber')) labelName = 'UBER';
-        if (carrierText.includes('sedex')) labelName = 'SEDEX';
+        function playBeep(freq, duration, vol) {
+            if (!audioCtx) initAudio();
+            if (!audioCtx || audioCtx.state === 'suspended') return;
 
-        if (labelName.length > 25) {
-            labelName = labelName.substring(0, 22) + '...';
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(vol || 0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch (e) {
+                console.error("Erro ao emitir sinal sonoro:", e);
+            }
         }
 
-        return { label: '🚚 ' + labelName.toUpperCase(), isExpress: isExpress, isPickup: false };
-    }
+        function playStartupChime() {
+            if (!audioCtx) initAudio();
+            if (!audioCtx || audioCtx.state === 'suspended') return;
 
-    // --- SISTEMA DE DESIGN PREMIUM COM ANIMAÇÕES (ESTILO OPERACIONAL ESCURO) ---
-    const style = document.createElement('style');
-    style.innerHTML = `
+            try {
+                const now = audioCtx.currentTime;
+                // Frequências para um arpejo ascendente de Dó Maior 9 (C5, E5, G5, B5, C6)
+                const freqs = [523.25, 659.25, 783.99, 987.77, 1046.50];
+
+                freqs.forEach((freq, index) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + (index * 0.08));
+
+                    gain.gain.setValueAtTime(0.0, now + (index * 0.08));
+                    gain.gain.linearRampToValueAtTime(0.06, now + (index * 0.08) + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + (index * 0.08) + 0.45);
+
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+
+                    osc.start(now + (index * 0.08));
+                    osc.stop(now + (index * 0.08) + 0.45);
+                });
+            } catch (e) {
+                console.error("Erro ao emitir chime de inicialização:", e);
+            }
+        }
+
+        function playSiren() {
+            // Alarme de emergência com volume máximo e padrão intermitente
+            const volume = 1.0;
+            const duracao = 0.15;
+
+            // Sequência de tons agudos em padrão de alarme
+            playBeep(1000, duracao, volume);
+            setTimeout(() => playBeep(1200, duracao, volume), 100);
+            setTimeout(() => playBeep(1400, duracao, volume), 200);
+            setTimeout(() => playBeep(1200, duracao, volume), 300);
+            setTimeout(() => playBeep(1000, duracao, volume), 400);
+            setTimeout(() => playBeep(1400, duracao, volume), 500);
+            setTimeout(() => playBeep(1600, 0.2, volume), 600);
+        }
+
+        function playNotificationChime() {
+            if (!audioCtx) initAudio();
+            if (!audioCtx || audioCtx.state === 'suspended') return;
+
+            try {
+                const now = audioCtx.currentTime;
+                // Lindo acorde arpejado suave e ascendente de Dó Maior (C5 -> E5 -> G5)
+                const freqs = [523.25, 659.25, 783.99];
+                freqs.forEach((freq, index) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + (index * 0.05));
+
+                    gain.gain.setValueAtTime(0.0, now + (index * 0.05));
+                    gain.gain.linearRampToValueAtTime(0.08, now + (index * 0.05) + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + (index * 0.05) + 0.35);
+
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+
+                    osc.start(now + (index * 0.05));
+                    osc.stop(now + (index * 0.05) + 0.4);
+                });
+            } catch (e) {
+                console.error("Erro ao emitir chime de notificação:", e);
+            }
+        }
+
+        // --- DESIGN SYSTEM PREMIUM PARA TV (MODO TV EM TELA CHEIA) ---
+        const style = document.createElement('style');
+        style.innerHTML = `
         :root {
             --neon-green: #00ff88;
             --neon-yellow: #f1c40f;
             --neon-red: #ff3e3e;
-            --neon-orange: #e67e22;
-            --neon-blue: #3498db;
-            --neon-purple: #9b59b6;
-            --bg-dark: rgba(18, 18, 18, 0.92);
-            --card-bg: rgba(28, 28, 28, 0.95);
-            --font-main: 'Outfit', sans-serif;
+            --neon-orange: #ff9f43;
+            --neon-blue: #00d2ff;
+            --bg-dark-tv: #0b0b0f;
+            --card-bg-tv: rgba(20, 20, 25, 0.95);
+            --font-main: 'Lilita One', cursive;
         }
 
-        /* Animações dos Containers Nativos */
-        @keyframes pulseRedBorder {
-            0%, 100% { box-shadow: 0 0 15px rgba(255, 62, 62, 0.5), inset 0 0 8px rgba(255, 62, 62, 0.2); border-color: var(--neon-red); }
-            50% { box-shadow: 0 0 30px rgba(255, 62, 62, 0.9), inset 0 0 20px rgba(255, 62, 62, 0.4); border-color: #ff6b6b; }
-        }
-        @keyframes pulseNormalBorder {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.005); }
+        /* Container Principal do Modo TV */
+        .oms-tv-dashboard {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            background: var(--bg-dark-tv) !important;
+            color: #fff !important;
+            font-family: var(--font-main);
+            z-index: 200000;
+            display: flex;
+            flex-direction: column;
+            padding: 20px 30px;
+            box-sizing: border-box;
+            overflow: hidden;
+            transition: all 0.5s ease;
         }
 
-        .oms-pulse-red-container {
-            animation: pulseRedBorder 1.2s infinite ease-in-out !important;
-            background-color: rgba(255, 62, 62, 0.03) !important;
+        /* Animações e Pulsações Neon */
+        @keyframes pulseRedGlow {
+            0%, 100% { box-shadow: 0 0 15px rgba(255, 62, 62, 0.4); border-color: var(--neon-red); }
+            50% { box-shadow: 0 0 35px rgba(255, 62, 62, 0.8); border-color: #ff6b6b; }
         }
-        .oms-pulse-normal-container {
-            animation: pulseNormalBorder 3s infinite ease-in-out;
+        @keyframes pulseGreenGlow {
+            0%, 100% { box-shadow: 0 0 15px rgba(0, 255, 136, 0.3); border-color: var(--neon-green); }
+            50% { box-shadow: 0 0 30px rgba(0, 255, 136, 0.7); border-color: #55efc4; }
+        }
+        @keyframes pulseYellowGlow {
+            0%, 100% { box-shadow: 0 0 12px rgba(241, 196, 15, 0.3); border-color: var(--neon-yellow); }
+            50% { box-shadow: 0 0 25px rgba(241, 196, 15, 0.6); border-color: #f39c12; }
+        }
+        @keyframes heartbeat {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
-        /* Normalização Premium dos Containers Nativos */
-        .step-box {
+        /* Top Header do Painel */
+        .tv-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+        .tv-title-group {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .tv-main-title {
+            font-size: clamp(24px, 2.5vw, 36px);
+            font-weight: 900;
+            letter-spacing: 1px;
+            background: linear-gradient(90deg, var(--neon-green), var(--neon-blue));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 30px rgba(0, 255, 136, 0.1);
+        }
+        .tv-subtitle {
+            font-size: 14px;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.5);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+        .tv-clock-group {
+            text-align: right;
+            display: flex;
+            flex-direction: column;
+        }
+        .tv-clock {
+            font-size: clamp(28px, 2.8vw, 42px);
+            font-weight: 900;
+            color: #fff;
+            line-height: 1;
+        }
+        .tv-date {
+            font-size: 13px;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.4);
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Container do Pipeline Horizontal Superior */
+        .tv-summary-pipeline {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 20px;
+            margin-bottom: 25px;
+            flex-shrink: 0;
+        }
+        .pipeline-card {
+            background: rgba(18, 28, 48, 0.6) !important;
+            border: 2px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 20px !important;
+            padding: 14px 20px !important;
             display: flex !important;
-            flex-direction: column !important;
-            justify-content: flex-start !important;
-            min-height: 140px !important;
-            height: 100% !important;
-            align-self: stretch !important;
-            padding: 22px 20px !important;
-            box-sizing: border-box !important;
-            position: relative !important;
-            float: none !important;
-            width: 100% !important;
-            margin: 0 !important;
-
-            /* Força o design escuro premium de alto contraste */
-            background: rgba(20, 20, 20, 0.95) !important;
-            color: #fff !important;
-            border: 2px solid rgba(255, 255, 255, 0.05) !important;
-            border-radius: 14px !important;
-            backdrop-filter: blur(10px) !important;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            align-items: center !important;
+            gap: 15px !important;
+            backdrop-filter: blur(15px) !important;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3) !important;
         }
-
-        /* Garante que nenhum elemento nativo interno sobreponha fundos ou cores claras */
-        .step-box *:not(.oms-native-badge):not(.oms-native-info-box):not(.oms-native-info-box *) {
-            color: #fff !important;
-            background: transparent !important;
-            box-shadow: none !important;
+        .pipeline-card:hover {
+            transform: translateY(-4px) !important;
+            border-color: rgba(255, 255, 255, 0.2) !important;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4) !important;
         }
-
-        /* Os demais cards secundários ficam embaixo, discretos e sem brilho neon */
-        .step-box.delivered,
-        .step-box.receive,
-        .step-box.packing-list {
-            display: flex !important;
-            order: 10 !important;
-            grid-column: span 2 !important; /* Cada um ocupa 2 das 6 colunas, cabendo perfeitamente os 3 na segunda linha! */
-            background: rgba(28, 28, 28, 0.95) !important;
-            color: #ffffff !important;
-            border: 1.5px dashed rgba(255, 255, 255, 0.45) !important;
-            box-shadow: none !important;
-            min-height: 100px !important;
-            border-radius: 12px !important;
-            padding: 14px 18px !important;
+        .pipeline-icon-container {
+            width: 46px;
+            height: 46px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            flex-shrink: 0;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
         }
-
-        /* Deixa o texto interno dos cards secundários limpo e visível */
-        .step-box.delivered *,
-        .step-box.receive *,
-        .step-box.packing-list * {
-            color: #ffffff !important;
-            text-shadow: none !important;
-            background: transparent !important;
-            opacity: 0.95 !important;
+        .pipeline-info {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
         }
-
-        /* Layout em Grid de 6 Colunas para o Fluxo Logístico */
-        .oms-grid-parent {
-            display: grid !important;
-            grid-template-columns: repeat(6, 1fr) !important;
-            grid-gap: 16px !important;
-            margin: 25px 0 !important;
-            width: 100% !important;
-            box-sizing: border-box !important;
-            float: none !important;
-            clear: both !important;
-        }
-
-        /* Ordenação e Posicionamento dos Cards no Grid de Fluxo */
-        .pending.step-box { order: 1 !important; grid-column: span 1 !important; }
-        .picking.step-box { order: 2 !important; grid-column: span 1 !important; }
-        .billing.step-box { order: 3 !important; grid-column: span 1 !important; }
-        .preparing.step-box { order: 4 !important; grid-column: span 1 !important; }
-        .shipping.step-box { order: 5 !important; grid-column: span 1 !important; }
-        .pickup.step-box { order: 6 !important; grid-column: span 1 !important; }
-
-        /* Oculta a descrição longa nativa e a quantidade redundante nativa */
-        .step-box .description p,
-        .step-box .qty {
-            display: none !important;
-        }
-
-        /* Estilização Premium do Título do Card Nativo */
-        .step-box .description h3 {
-            margin: 0 !important;
-            font-size: 15px !important;
-            font-weight: 900 !important;
-            color: #fff !important;
-            font-family: 'Outfit', sans-serif !important;
-            letter-spacing: 0.8px !important;
+        .pipeline-label {
+            font-size: 11px !important;
+            font-weight: 800 !important;
+            color: rgba(255, 255, 255, 0.4) !important;
+            letter-spacing: 1.2px !important;
             text-transform: uppercase !important;
         }
-
-        /* Estilo da Barra Lateral de Acompanhamento (Draggable Drawer) */
-        .oms-support-dashboard {
-            position: fixed; z-index: 99999;
-            background: var(--bg-dark) !important; color: #fff;
-            border-radius: 20px; border: 2px solid rgba(255,255,255,0.1);
-            backdrop-filter: blur(25px); box-shadow: 0 20px 40px rgba(0,0,0,0.6);
-            width: 360px; font-family: var(--font-main); overflow: hidden; user-select: none;
-            transition: border-color 0.3s ease;
+        .pipeline-val {
+            font-size: 42px !important; /* Aumentado a pedido do usuario */
+            font-weight: 900 !important;
+            margin-top: 1px !important;
+            font-family: 'Lilita One', cursive !important;
+            line-height: 1 !important;
         }
 
-        @media print { .oms-support-dashboard { display: none !important; } }
+        /* Pod Glow States */
+        .pod-waiting { border-color: rgba(0, 255, 136, 0.25) !important; }
+        .pod-waiting .pipeline-icon-container { background: rgba(0, 255, 136, 0.1); border-color: rgba(0, 255, 136, 0.3); box-shadow: 0 0 15px rgba(0, 255, 136, 0.2); }
 
-        .oms-support-handle {
-            background: rgba(255,255,255,0.06); padding: 15px 20px; cursor: move;
-            font-size: 11px; color: #fff; font-weight: 900; display: flex;
-            justify-content: space-between; align-items: center; letter-spacing: 1.5px;
-            border-bottom: 1px solid rgba(255,255,255,0.08);
-        }
+        .pod-picking { border-color: rgba(241, 196, 15, 0.25) !important; }
+        .pod-picking .pipeline-icon-container { background: rgba(241, 196, 15, 0.1); border-color: rgba(241, 196, 15, 0.3); box-shadow: 0 0 15px rgba(241, 196, 15, 0.2); }
 
-        .oms-support-content { padding: 15px; }
+        .pod-invoicing { border-color: rgba(52, 152, 219, 0.25) !important; }
+        .pod-invoicing .pipeline-icon-container { background: rgba(52, 152, 219, 0.1); border-color: rgba(52, 152, 219, 0.3); box-shadow: 0 0 15px rgba(52, 152, 219, 0.2); }
 
-        .support-stage-row {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 12px 15px; border-bottom: 1px solid rgba(255,255,255,0.05);
-            border-radius: 10px; cursor: pointer; transition: all 0.2s ease;
-            margin-bottom: 4px;
-        }
-        .support-stage-row:hover {
-            background: rgba(255,255,255,0.05);
-        }
-        .support-stage-row.active {
-            background: rgba(255,255,255,0.08);
-            border-bottom-left-radius: 0; border-bottom-right-radius: 0;
-            margin-bottom: 0;
-        }
+        .pod-checked { border-color: rgba(230, 126, 34, 0.25) !important; }
+        .pod-checked .pipeline-icon-container { background: rgba(230, 126, 34, 0.1); border-color: rgba(230, 126, 34, 0.3); box-shadow: 0 0 15px rgba(230, 126, 34, 0.2); }
 
-        .stage-label-group {
-            display: flex; align-items: center; gap: 10px;
+        /* Grid Principal de Conteúdo (Esquerda vs Direita) */
+        .tv-main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            flex: 1;
+            min-height: 0; /* Impede overflow no grid */
         }
-        .stage-icon {
-            font-size: 16px; width: 20px; text-align: center;
+        .tv-column {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
         }
-        .stage-title {
-            font-size: 12px; font-weight: 700; color: #ffffff;
+        .tv-column-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            border-radius: 12px;
+            font-weight: 900;
+            font-size: 18px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 15px;
+            flex-shrink: 0;
         }
-
-        .stage-count-badge {
-            font-size: 14px; font-weight: 900; padding: 2px 8px;
-            border-radius: 6px; background: rgba(255,255,255,0.08);
-            color: rgba(255, 255, 255, 0.4); transition: all 0.2s ease;
+        .tv-column-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
-
-        .support-stage-row.has-items .stage-count-badge {
-            color: #ffffff; font-weight: 900;
-        }
-
-        .stage-waiting.has-items .stage-count-badge { background: rgba(0, 255, 136, 0.2); color: var(--neon-green); }
-        .stage-picking.has-items .stage-count-badge { background: rgba(241, 196, 15, 0.2); color: var(--neon-yellow); }
-        .stage-checked.has-items .stage-count-badge { background: rgba(230, 126, 34, 0.2); color: var(--neon-orange); }
-        .stage-invoicing.has-items .stage-count-badge { background: rgba(52, 152, 219, 0.2); color: var(--neon-blue); }
-        .stage-shipping.has-items .stage-count-badge { background: rgba(155, 89, 182, 0.2); color: var(--neon-purple); }
-        .stage-pickup.has-items .stage-count-badge { background: rgba(255, 62, 62, 0.2); color: var(--neon-red); }
-
-        .stage-detail-panel {
+        .tv-column-counter {
+            font-size: 20px;
+            font-weight: 900;
             background: rgba(0, 0, 0, 0.2);
-            border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;
-            padding: 10px 12px; border: 1px solid rgba(255,255,255,0.05);
-            border-top: none; max-height: 220px; overflow-y: auto;
-            margin-bottom: 8px; display: none;
-            scrollbar-width: thin;
+            padding: 2px 10px;
+            border-radius: 6px;
+        }
+        .column-novos-header {
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.15), rgba(0, 210, 255, 0.05));
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            color: var(--neon-green);
+        }
+        .column-gargalos-header {
+            background: linear-gradient(135deg, rgba(255, 62, 62, 0.15), rgba(255, 159, 67, 0.05));
+            border: 1px solid rgba(255, 62, 62, 0.3);
+            color: var(--neon-red);
         }
 
-        .stage-detail-panel.open {
-            display: block;
+        /* Lista de Pedidos com Scroll Integrado */
+        .tv-orders-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            padding-right: 8px;
         }
 
-        .support-order-card {
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.15);
-            border-radius: 8px; padding: 10px; margin-bottom: 8px;
-            font-size: 12px; transition: transform 0.15s ease;
+        /* Cards Operacionais Gigantes */
+        .tv-order-card {
+            background: var(--card-bg-tv);
+            border: 3px solid rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            position: relative;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            transition: all 0.3s ease;
         }
-        .support-order-card:hover {
-            transform: scale(1.01);
-            background: rgba(255,255,255,0.1);
-            border-color: rgba(255,255,255,0.3);
+
+        /* Cores dos Cards e Pulsações */
+        .tv-card-green { border-color: var(--neon-green) !important; animation: pulseGreenGlow 2.5s infinite; }
+        .tv-card-orange { border-color: var(--neon-orange) !important; animation: pulseYellowGlow 1.8s infinite; }
+        .tv-card-red { border-color: var(--neon-red) !important; animation: pulseRedGlow 1s infinite; }
+
+        /* Estrutura interna dos Cards gigantes */
+        .tv-card-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        .support-card-row {
-            display: flex; justify-content: space-between; align-items: center;
+        .tv-card-id {
+            font-size: clamp(20px, 2.2vw, 28px);
+            font-weight: 900;
+            color: #fff;
+            letter-spacing: 0.5px;
         }
-        .support-card-id {
-            font-weight: 900; color: #ffffff; cursor: pointer; text-decoration: underline;
+        .tv-card-badge {
+            font-size: clamp(14px, 1.4vw, 18px);
+            font-weight: 900;
+            padding: 6px 14px;
+            border-radius: 8px;
+            text-transform: uppercase;
         }
-        .support-card-badge {
-            padding: 2px 6px; border-radius: 4px; font-size: 9px;
+        .badge-green { background: rgba(0, 255, 136, 0.15); color: var(--neon-green); border: 1px solid var(--neon-green); }
+        .badge-orange { background: rgba(255, 159, 67, 0.15); color: var(--neon-orange); border: 1px solid var(--neon-orange); }
+        .badge-red { background: rgba(255, 62, 62, 0.15); color: var(--neon-red); border: 1px solid var(--neon-red); }
+
+        .tv-card-carrier {
+            font-size: clamp(18px, 1.8vw, 24px);
+            font-weight: 900;
+            text-transform: uppercase;
         }
-        .support-card-desc {
-            color: #ffffff; font-weight: 900;
+        .carrier-pickup { color: var(--neon-yellow); }
+        .carrier-delivery { color: var(--neon-blue); }
+
+        .tv-card-time {
+            font-size: clamp(20px, 2.2vw, 30px);
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
-        .support-card-items {
-            color: #ffffff; font-weight: 700; opacity: 0.9;
+        .time-green { color: var(--neon-green); text-shadow: 0 0 10px rgba(0,255,136,0.2); }
+        .time-orange { color: var(--neon-yellow); text-shadow: 0 0 10px rgba(241,196,15,0.2); }
+        .time-red { color: var(--neon-red); text-shadow: 0 0 15px rgba(255,62,62,0.3); }
+
+        .tv-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            padding-top: 8px;
+            font-size: clamp(12px, 1.2vw, 16px);
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.5);
         }
-        .support-card-customer {
-            color: #ffffff; font-size: 11px; font-weight: 700; opacity: 0.85;
+        .tv-card-customer {
+            max-width: 70%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
-        .support-bottleneck-label {
-            font-size: 10px; font-weight: 900; margin-top: 6px;
-            background: rgba(0,0,0,0.25); padding: 4px 8px; border-radius: 4px;
+
+        .tv-bottleneck-alert {
+            background: rgba(255, 62, 62, 0.1);
+            border: 1px dashed var(--neon-red);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: clamp(12px, 1.3vw, 16px);
+            font-weight: 900;
+            color: #ff8b8b;
+            text-align: center;
+            margin-top: 4px;
+        }
+
+        /* Layout de Estado Vazio / Tudo em Dia */
+        .tv-empty-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 40px;
+        }
+        .tv-empty-glow {
+            width: 140px; height: 140px;
+            background: rgba(0, 255, 136, 0.05);
+            border: 4px solid var(--neon-green);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 64px;
+            box-shadow: 0 0 40px rgba(0, 255, 136, 0.3);
+            margin-bottom: 25px;
+            animation: heartbeat 2s infinite ease-in-out;
+        }
+        .tv-empty-title {
+            font-size: clamp(28px, 3vw, 42px);
+            font-weight: 900;
+            color: var(--neon-green);
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+        .tv-empty-sub {
+            font-size: clamp(16px, 1.6vw, 22px);
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.6);
+            max-width: 600px;
+            line-height: 1.4;
+        }
+
+        /* Estilos do Destaque da Etapa Despacho */
+        @keyframes pulseRedBorderDespacho {
+            0%, 100% { box-shadow: 0 0 15px rgba(255, 62, 62, 0.4); border-color: var(--neon-red); }
+            50% { box-shadow: 0 0 35px rgba(255, 62, 62, 0.8); border-color: #ff6b6b; }
+        }
+        .despacho-card-alerta {
+            border: 2px solid var(--neon-red) !important;
+            animation: pulseRedBorderDespacho 1.2s infinite ease-in-out !important;
+            background: rgba(255, 62, 62, 0.08) !important;
+        }
+        .despacho-card-ok {
+            border: 2px solid var(--neon-green) !important;
+            background: rgba(0, 255, 136, 0.05) !important;
+            box-shadow: none !important;
+        }
+
+        /* Banner de Alerta de Lista de Despacho */
+        @keyframes pulseDispatchBanner {
+            0%, 100% { box-shadow: 0 0 20px rgba(255, 62, 62, 0.4), inset 0 0 30px rgba(255, 62, 62, 0.05); border-color: var(--neon-red); }
+            50% { box-shadow: 0 0 50px rgba(255, 62, 62, 0.9), inset 0 0 60px rgba(255, 62, 62, 0.12); border-color: #ff8080; }
+        }
+        .dispatch-alert-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 22px 35px;
+            border-radius: 16px;
+            border: 3px solid var(--neon-red);
+            background: linear-gradient(135deg, rgba(255, 62, 62, 0.15), rgba(255, 62, 62, 0.05));
+            animation: pulseDispatchBanner 1.4s infinite ease-in-out;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+        .dispatch-alert-banner-icon {
+            font-size: 60px;
+            line-height: 1;
+            animation: heartbeat 1s infinite;
+        }
+        .dispatch-alert-banner-text {
+            flex: 1;
+            margin: 0 25px;
+        }
+        .dispatch-alert-banner-title {
+            font-size: 32px;
+            font-weight: 900;
+            color: var(--neon-red);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            line-height: 1;
+        }
+        .dispatch-alert-banner-sub {
+            font-size: 18px;
+            font-weight: 700;
+            color: rgba(255,255,255,0.75);
+            margin-top: 6px;
+        }
+        .dispatch-alert-banner-count {
+            font-size: 70px;
+            font-weight: 900;
+            color: var(--neon-red);
+            font-family: 'Lilita One', cursive;
+            line-height: 1;
+            text-shadow: 0 0 25px rgba(255,62,62,0.7);
+            min-width: 100px;
             text-align: center;
         }
-        .support-no-orders {
-            text-align: center; color: #ffffff; opacity: 0.7; padding: 20px 0; font-size: 12px; font-style: italic;
-        }
-        .support-toast {
-            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-            background: rgba(0,0,0,0.85); color: var(--neon-green); padding: 6px 12px;
-            border-radius: 8px; font-size: 10px; font-weight: bold; border: 1px solid var(--neon-green);
-            opacity: 0; transition: opacity 0.2s ease; z-index: 100000; pointer-events: none;
-        }
-        .support-toast.show { opacity: 1; }
 
-        .status-dot {
-            width: 8px; height: 8px; background: var(--neon-green); border-radius: 50%;
-            display: inline-block; margin-right: 8px; box-shadow: 0 0 8px var(--neon-green);
+        /* Animações e Efeitos Holográficos para Novo Pedido */
+        @keyframes pulseHologram {
+            0% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.4); border-color: var(--neon-green); }
+            50% { box-shadow: 0 0 50px rgba(0, 255, 136, 0.8); border-color: #00ffcc; }
+            100% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.4); border-color: var(--neon-green); }
+        }
+        @keyframes slideInUp {
+            from { transform: translate(-50%, 100px); opacity: 0; }
+            to { transform: translate(-50%, 0); opacity: 1; }
         }
 
-        /* Scrollbar styling */
-        .stage-detail-panel::-webkit-scrollbar { width: 5px; }
-        .stage-detail-panel::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
-        .stage-detail-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
-
-        /* Stepper Flow do Operador */
-        .oms-stepper-container {
-            width: 100% !important;
-            background: rgba(20, 20, 20, 0.95) !important;
-            border: 2px solid rgba(255, 255, 255, 0.08) !important;
-            border-radius: 16px !important;
-            padding: 16px 20px !important;
-            box-sizing: border-box !important;
-            margin-bottom: 20px !important;
-            font-family: 'Outfit', sans-serif !important;
-            display: flex !important;
-            flex-direction: column !important;
-            gap: 12px !important;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
-            position: relative !important;
-            backdrop-filter: blur(10px) !important;
+        @keyframes marqueeScroll {
+            0% { transform: translate(-100%, 0); left: 0; }
+            100% { transform: translate(0, 0); left: 100%; }
         }
 
-        .oms-stepper-title {
-            font-size: 11px !important;
-            font-weight: 900 !important;
-            letter-spacing: 1.5px !important;
-            color: rgba(255, 255, 255, 0.5) !important;
-            text-transform: uppercase !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: space-between !important;
+        @keyframes pulseHologramBlue {
+            0% { box-shadow: 0 0 25px rgba(0, 210, 255, 0.4); border-color: var(--neon-blue); }
+            50% { box-shadow: 0 0 50px rgba(0, 210, 255, 0.8); border-color: #00d2ff; }
+            100% { box-shadow: 0 0 25px rgba(0, 210, 255, 0.4); border-color: var(--neon-blue); }
         }
 
-        .oms-stepper-steps {
-            display: flex !important;
-            justify-content: space-between !important;
-            align-items: center !important;
-            gap: 8px !important;
-            position: relative !important;
-            margin: 6px 0 !important;
-        }
-
-        .oms-stepper-step {
-            flex: 1 !important;
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            padding: 10px 6px !important;
-            background: rgba(255, 255, 255, 0.03) !important;
-            border: 1px solid rgba(255, 255, 255, 0.06) !important;
-            border-radius: 10px !important;
-            text-align: center !important;
-            position: relative !important;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-            cursor: pointer !important;
-        }
-
-        .oms-stepper-step:hover {
-            background: rgba(255, 255, 255, 0.07) !important;
-            border-color: rgba(255, 255, 255, 0.2) !important;
-        }
-
-        .oms-stepper-step.active-step {
-            background: rgba(255, 255, 255, 0.07) !important;
-            border-color: var(--neon-color) !important;
-            box-shadow: 0 0 15px var(--neon-color-alpha) !important;
-        }
-
-        .oms-stepper-step-num {
-            font-size: 9px !important;
-            font-weight: 900 !important;
-            color: rgba(255, 255, 255, 0.4) !important;
-            margin-bottom: 2px !important;
-        }
-
-        .oms-stepper-step.active-step .oms-stepper-step-num {
-            color: var(--neon-color) !important;
-        }
-
-        .oms-stepper-step-label {
-            font-size: 11px !important;
-            font-weight: 700 !important;
+        .new-order-modal {
+            position: fixed;
+            top: 80px;
+            bottom: 25px;
+            left: 30px;
+            right: 30px;
+            width: auto !important;
+            max-width: none !important;
+            background: linear-gradient(135deg, rgba(10, 25, 47, 0.98), rgba(2, 12, 27, 0.99)) !important;
+            border: 3px solid var(--neon-green) !important;
+            border-radius: 24px !important;
+            padding: 20px 30px !important;
+            z-index: 500000 !important;
+            box-shadow: 0 20px 60px rgba(0, 255, 136, 0.3) !important;
+            backdrop-filter: blur(20px) !important;
+            animation: slideInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1), pulseHologram 2s infinite ease-in-out !important;
+            font-family: 'Lilita One', cursive !important;
             color: #ffffff !important;
-            letter-spacing: 0.3px !important;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.5s ease-in-out;
         }
 
-        .oms-stepper-step-badge {
-            position: absolute !important;
-            top: -8px !important;
-            right: -4px !important;
-            background: #ff3e3e !important;
-            color: #000 !important;
-            font-size: 9px !important;
-            font-weight: 900 !important;
-            padding: 2px 6px !important;
-            border-radius: 20px !important;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+        .new-order-modal.rotate-mode {
+            position: fixed;
+            top: 80px;
+            bottom: 25px;
+            left: 30px;
+            right: 30px;
+            width: auto !important;
+            max-width: none !important;
+            border-color: var(--neon-blue) !important;
+            box-shadow: 0 20px 60px rgba(0, 210, 255, 0.4) !important;
+            animation: slideInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1), pulseHologramBlue 2s infinite ease-in-out !important;
         }
 
-        .oms-stepper-connector {
-            color: rgba(255, 255, 255, 0.15) !important;
+        .new-order-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+
+        .new-order-modal-title {
+            font-size: clamp(20px, 2vw, 28px);
+            font-weight: 900;
+            color: var(--neon-green);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .new-order-modal.rotate-mode .new-order-modal-title {
+            color: var(--neon-blue);
+        }
+
+        .new-order-modal-id {
+            font-size: clamp(24px, 2.5vw, 36px);
+            font-weight: 900;
+            color: #ffffff;
+            font-family: 'Lilita One', cursive;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+        }
+
+        .new-order-items-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 6px;
+        }
+
+        .new-order-item-row {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 15px 20px;
+            transition: all 0.2s ease;
+        }
+        .new-order-item-row:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .new-order-item-image {
+            width: 170px;
+            height: 170px;
+            border-radius: 16px;
+            object-fit: cover;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 64px;
+            flex-shrink: 0;
+        }
+
+        .new-order-item-info {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        .new-order-item-name {
+            font-size: clamp(20px, 2.2vw, 32px);
+            font-weight: 900;
+            color: #ffffff;
+            line-height: 1.3;
+        }
+
+        .new-order-item-sku {
+            font-size: clamp(14px, 1.4vw, 20px);
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 700;
+            margin-top: 8px;
+        }
+
+        .new-order-item-qty {
+            font-size: clamp(28px, 3vw, 42px) !important;
             font-weight: 900 !important;
+            color: var(--neon-green) !important;
+            background: rgba(0, 255, 136, 0.08) !important;
+            border: 1px solid rgba(0, 255, 136, 0.2) !important;
+            padding: 12px 25px !important;
+            border-radius: 16px !important;
+            white-space: nowrap;
+        }
+
+        .new-order-modal.rotate-mode .new-order-item-qty {
+            color: var(--neon-blue) !important;
+            background: rgba(0, 210, 255, 0.08) !important;
+            border-color: rgba(0, 210, 255, 0.2) !important;
+        }
+
+        /* Overlay para Autoplay de Áudio */
+        .tv-audio-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 300000;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-family: var(--font-main); text-align: center; cursor: pointer;
+        }
+        .tv-audio-button {
+            padding: 25px 50px;
+            background: linear-gradient(135deg, var(--neon-green), #00d2ff);
+            color: #000; border: none; border-radius: 20px;
+            font-size: 26px; font-weight: 900; letter-spacing: 1px;
+            box-shadow: 0 10px 40px rgba(0,255,136,0.3);
+            animation: heartbeat 1.5s infinite;
+        }
+
+        /* Botão Corner de Alternar para Modo Web normal - Design Premium com Alto Contraste */
+        .tv-toggle-mode-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            z-index: 250000;
+            background: #111c30 !important; /* Fundo escuro azul sólido para alto contraste */
+            border: 2px solid #00ff88 !important; /* Borda neon green brilhante */
+            color: #ffffff !important; /* Fonte branca */
+            padding: 12px 24px !important; /* Maior e mais fácil de clicar */
+            border-radius: 30px !important;
+            font-family: var(--font-main) !important;
             font-size: 14px !important;
-            user-select: none !important;
-        }
-
-        .oms-stepper-action-banner {
-            background: rgba(255, 255, 255, 0.04) !important;
-            border-left: 4px solid var(--accent-color, var(--neon-green)) !important;
-            border-radius: 8px !important;
-            padding: 12px 16px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            gap: 12px !important;
-            box-shadow: inset 0 0 10px rgba(255,255,255,0.01) !important;
-        }
-
-        .oms-stepper-action-info {
-            display: flex !important;
-            flex-direction: column !important;
-            gap: 2px !important;
-        }
-
-        .oms-stepper-action-title {
-            font-size: 12px !important;
-            font-weight: 900 !important;
-            color: #ffffff !important;
-            letter-spacing: 0.3px !important;
-        }
-
-        .oms-stepper-action-desc {
-            font-size: 11px !important;
-            color: rgba(255, 255, 255, 0.7) !important;
-            font-weight: 500 !important;
-        }
-
-        .oms-stepper-action-btn {
-            background: var(--accent-color, var(--neon-green)) !important;
-            color: #000000 !important;
-            border: none !important;
-            padding: 8px 16px !important;
-            border-radius: 8px !important;
-            font-size: 11px !important;
             font-weight: 900 !important;
             cursor: pointer !important;
-            text-transform: uppercase !important;
-            letter-spacing: 0.5px !important;
-            white-space: nowrap !important;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4) !important;
+            backdrop-filter: blur(10px) !important;
             transition: all 0.2s ease !important;
-            box-shadow: 0 4px 12px var(--accent-color-alpha, rgba(0, 255, 136, 0.3)) !important;
-        }
-
-        .oms-stepper-action-btn:hover {
-            transform: translateY(-2px) !important;
-            box-shadow: 0 6px 16px var(--accent-color-alpha, rgba(0, 255, 136, 0.4)) !important;
-        }
-
-        /* Checklists das Etapas */
-        .oms-checklist-container {
-            margin-top: 10px !important;
-            display: flex !important;
-            flex-direction: column !important;
-            gap: 6px !important;
-            width: 100% !important;
-        }
-
-        .oms-checklist-item {
-            display: flex !important;
-            align-items: center !important;
-            gap: 8px !important;
-            font-size: 10px !important;
-            font-weight: 700 !important;
-            color: rgba(255, 255, 255, 0.8) !important;
-            line-height: 1.3 !important;
-        }
-
-        .oms-checklist-checkbox {
-            width: 12px !important;
-            height: 12px !important;
-            border: 1px solid rgba(255, 255, 255, 0.3) !important;
-            border-radius: 3px !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            cursor: pointer !important;
-            user-select: none !important;
-            color: #000000 !important;
-            font-size: 8px !important;
-            font-weight: 900 !important;
-            background: rgba(0,0,0,0.25) !important;
-            transition: all 0.2s ease !important;
-            flex-shrink: 0 !important;
-        }
-
-        .oms-checklist-checkbox.checked {
-            background: var(--stage-color) !important;
-            border-color: var(--stage-color) !important;
-            color: #000000 !important;
-            box-shadow: 0 0 6px var(--stage-color) !important;
-        }
-
-        .oms-checklist-btn {
-            margin-top: 12px !important;
-            width: 100% !important;
-            background: var(--stage-color) !important;
-            color: #000000 !important;
-            border: none !important;
-            padding: 8px 12px !important;
-            border-radius: 8px !important;
-            font-size: 10px !important;
-            font-weight: 900 !important;
-            cursor: pointer !important;
+            letter-spacing: 1px !important;
             text-transform: uppercase !important;
-            letter-spacing: 0.5px !important;
-            transition: all 0.2s ease !important;
-            box-shadow: 0 4px 10px var(--stage-color-alpha) !important;
-            text-align: center !important;
+        }
+        .tv-toggle-mode-btn:hover {
+            background: #00ff88 !important;
+            color: #0b0f19 !important;
+            border-color: #00ff88 !important;
+            transform: translateY(-3px) scale(1.05) !important;
+            box-shadow: 0 15px 30px rgba(0, 255, 136, 0.4) !important;
         }
 
-        .oms-checklist-btn:hover {
-            transform: translateY(-1.5px) !important;
-            box-shadow: 0 6px 14px var(--stage-color-alpha) !important;
+        /* Letreiro Neon / Premium Marquee */
+        .oms-marquee-container {
+            width: 100%;
+            overflow: hidden;
+            white-space: nowrap;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 10px 0;
+            margin-top: 5px;
+            margin-bottom: 15px;
+            box-sizing: border-box;
+            position: relative;
+        }
+        .oms-marquee-content {
+            display: inline-block;
+            white-space: nowrap;
+            padding-left: 100%;
+            animation: omsMarqueeAnim 20s linear infinite;
+            font-size: clamp(16px, 1.8vw, 24px);
+            font-weight: 900;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+        }
+        @keyframes omsMarqueeAnim {
+            0% { transform: translate3d(0, 0, 0); }
+            100% { transform: translate3d(-100%, 0, 0); }
         }
 
-        /* Responsividade para Monitores Menores e Laptops */
-        @media (max-width: 1400px) {
-            .oms-grid-parent {
-                grid-template-columns: repeat(3, 1fr) !important;
-            }
-            .step-box {
-                grid-column: span 1 !important;
-                min-height: 150px !important;
-            }
-            .step-box.delivered,
-            .step-box.receive,
-            .step-box.packing-list {
-                grid-column: span 1 !important;
-                min-height: 120px !important;
-            }
-        }
+        /* Scrollbar Premium */
+        .tv-orders-list::-webkit-scrollbar { width: 10px; }
+        .tv-orders-list::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 10px; }
+        .tv-orders-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; border: 2px solid var(--bg-dark-tv); }
+        .tv-orders-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
-        @media (max-width: 900px) {
-            .oms-stepper-steps {
-                flex-wrap: wrap !important;
-                justify-content: center !important;
-                gap: 12px !important;
-            }
-            .oms-stepper-connector {
-                display: none !important;
-            }
-            .oms-stepper-step {
-                flex: 1 1 120px !important;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .oms-grid-parent {
-                grid-template-columns: 1fr !important;
-            }
-            .step-box,
-            .step-box.delivered,
-            .step-box.receive,
-            .step-box.packing-list {
-                grid-column: span 1 !important;
-            }
-        }
-
-        /* Estilização Dark Neon da Tabela Nativa de Retiradas */
-        .oms-pickup-panel {
-            background: rgba(20, 20, 20, 0.95) !important;
-            border: 2px solid rgba(255, 255, 255, 0.08) !important;
-            border-radius: 16px !important;
-            padding: 20px !important;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
-            font-family: 'Outfit', sans-serif !important;
-            margin-top: 15px !important;
-        }
-        .oms-pickup-panel .panel-heading {
-            background: transparent !important;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
-            color: #ffffff !important;
-            font-weight: 900 !important;
-            font-size: 16px !important;
-            padding: 12px 0 !important;
-        }
-        .oms-pickup-table {
-            background: transparent !important;
-            color: #ffffff !important;
-        }
-        .oms-pickup-table th {
-            background: rgba(255, 255, 255, 0.03) !important;
-            color: rgba(255, 255, 255, 0.5) !important;
-            font-weight: 900 !important;
-            text-transform: uppercase !important;
-            font-size: 11px !important;
-            letter-spacing: 0.8px !important;
-            border-bottom: 2px solid rgba(255, 255, 255, 0.08) !important;
-            padding: 12px !important;
-        }
-        .oms-pickup-table td {
-            border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important;
-            padding: 14px 12px !important;
-            vertical-align: middle !important;
-        }
-
-        /* Estilização Premium da Página de Detalhes do Pedido - Tema Escuro Imersivo para Alto Contraste */
-        body.oms-order-page-active {
-            background: #0b0f19 !important; /* Fundo escuro azul ardósia profundo */
-            color: #f8fafc !important;
-        }
-
-        body.oms-order-page-active .page-content,
-        body.oms-order-page-active .main-container,
-        body.oms-order-page-active .container,
-        body.oms-order-page-active #content,
-        body.oms-order-page-active .content-wrapper {
-            background: #0b0f19 !important;
-            color: #f8fafc !important;
-        }
-
-        body.oms-order-page-active .order-resume,
-        body.oms-order-page-active .panel,
-        body.oms-order-page-active .panel-default {
-            background: #111c30 !important; /* Painéis com azul marinho escuro */
-            border: 2px solid rgba(255, 255, 255, 0.12) !important;
-            border-radius: 16px !important;
-            padding: 24px !important;
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5) !important;
-            color: #ffffff !important;
-            margin-bottom: 25px !important;
-        }
-
-        body.oms-order-page-active h1,
-        body.oms-order-page-active h2,
-        body.oms-order-page-active h3,
-        body.oms-order-page-active h4,
-        body.oms-order-page-active h5,
-        body.oms-order-page-active .panel-title,
-        body.oms-order-page-active .order-title {
-            color: #ffffff !important;
-            font-family: 'Outfit', sans-serif !important;
-            font-weight: 900 !important;
-            letter-spacing: 0.5px !important;
-            text-transform: uppercase !important;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
-            padding-bottom: 12px !important;
-            margin-bottom: 18px !important;
-        }
-
-        body.oms-order-page-active dl dt,
-        body.oms-order-page-active dt {
-            color: rgba(255, 255, 255, 0.55) !important;
-            font-family: 'Outfit', sans-serif !important;
-            font-weight: 900 !important;
-            text-transform: uppercase !important;
-            font-size: 10px !important;
-            letter-spacing: 0.5px !important;
-            margin-top: 8px !important;
-        }
-
-        body.oms-order-page-active dl dd,
-        body.oms-order-page-active dd,
-        body.oms-order-page-active .ng-binding {
-            color: #ffffff !important;
-            font-family: 'Outfit', sans-serif !important;
-            font-weight: 700 !important;
-            font-size: 13px !important;
-            margin-bottom: 12px !important;
-        }
-
-        /* Tabelas Internas do Detalhe */
-        body.oms-order-page-active table,
-        body.oms-order-page-active .table,
-        body.oms-order-page-active .table-bordered {
-            background: #111c30 !important;
-            color: #ffffff !important;
-            border: 1px solid rgba(255, 255, 255, 0.15) !important;
-            border-collapse: collapse !important;
-        }
-
-        body.oms-order-page-active table th,
-        body.oms-order-page-active .table th {
-            background: rgba(255, 255, 255, 0.05) !important;
-            color: rgba(255, 255, 255, 0.6) !important;
-            font-weight: 900 !important;
-            text-transform: uppercase !important;
-            font-size: 11px !important;
-            letter-spacing: 0.8px !important;
-            border: 1px solid rgba(255, 255, 255, 0.15) !important;
-            padding: 12px !important;
-        }
-
-        body.oms-order-page-active table td,
-        body.oms-order-page-active .table td {
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            padding: 14px 12px !important;
-            vertical-align: middle !important;
-            color: #ffffff !important;
-            font-weight: 700 !important;
-            background: transparent !important;
-        }
-
-        /* Linhas listradas em dark */
-        body.oms-order-page-active .table-striped tbody tr:nth-of-type(odd) {
-            background-color: rgba(255, 255, 255, 0.02) !important;
-        }
-        body.oms-order-page-active .table-striped tbody tr:hover {
-            background-color: rgba(255, 255, 255, 0.05) !important;
-        }
-
-        /* Histórico do Pedido (Linha do Tempo) */
-        body.oms-order-page-active .order-history-step,
-        body.oms-order-page-active .order-timeline-step,
-        body.oms-order-page-active .order-step {
-            border-left: 2px solid rgba(255, 255, 255, 0.15) !important;
-            padding-left: 20px !important;
-            margin-left: 10px !important;
-            position: relative !important;
-            margin-bottom: 18px !important;
-        }
-        body.oms-order-page-active .order-history-step::before,
-        body.oms-order-page-active .order-timeline-step::before {
-            content: '' !important;
-            position: absolute !important;
-            left: -7px !important;
-            top: 4px !important;
-            width: 12px !important;
-            height: 12px !important;
-            border-radius: 50% !important;
-            background: rgba(255, 255, 255, 0.3) !important;
-            border: 2px solid #0b0f19 !important;
-            transition: all 0.3s ease !important;
-        }
-        body.oms-order-page-active .order-history-step.active::before,
-        body.oms-order-page-active .order-timeline-step.active::before {
-            background: var(--neon-green) !important;
-            box-shadow: 0 0 10px var(--neon-green) !important;
-        }
-        body.oms-order-page-active .order-history-status,
-        body.oms-order-page-active .order-timeline-status,
-        body.oms-order-page-active .order-history-step .lead {
-            color: #ffffff !important;
-            font-weight: 900 !important;
-            font-size: 13px !important;
-            text-transform: uppercase !important;
-            margin: 0 !important;
-        }
-        body.oms-order-page-active .order-history-date,
-        body.oms-order-page-active .order-timeline-date,
-        body.oms-order-page-active .order-history-step small {
-            color: rgba(255, 255, 255, 0.65) !important;
-            font-size: 11px !important;
-            font-weight: 700 !important;
-        }
+        /* Ajustes de Impressão */
+        @media print { .oms-tv-dashboard, .tv-toggle-mode-btn { display: none !important; } }
     `;
-    style.id = 'oms-premium-global-stylesheet';
-    document.head.appendChild(style);
+        document.head.appendChild(style);
 
-    // --- INICIALIZAÇÃO DA INTERFACE OPERACIONAL ---
-    const dashboard = document.createElement('div');
-    dashboard.id = 'oms-premium-side-drawer';
-    dashboard.className = "oms-support-dashboard";
 
-    const savedPos = {
-        top: localStorage.getItem('oms_support_top') || '80px',
-        left: localStorage.getItem('oms_support_left') || 'auto',
-        right: localStorage.getItem('oms_support_right') || '30px'
-    };
-    Object.assign(dashboard.style, savedPos);
 
-    const handle = document.createElement('div');
-    handle.className = "oms-support-handle";
-    handle.innerHTML = `
-        <div><span class="status-dot"></span>ACOMPANHAMENTO OMS</div>
-        <div style="display:flex; align-items:center; gap:10px;">
-            <button id="oms-audio-toggle" style="
-                background:none; border:none; padding:0; margin:0;
-                cursor:pointer; font-size:12px; color:${audioMuted ? 'rgba(255,255,255,0.3)' : 'var(--neon-green)'};
-                transition:color 0.2s; display:flex; align-items:center;
-            ">${audioMuted ? '🔇' : '🔊'}</button>
-            <div style="opacity:0.5; font-size:10px;">LOJA ${LOJA_ID}</div>
+        // --- CONSTRUÇÃO DA ESTRUTURA DO WIDGET MODO TV ---
+        tvDashboard = document.createElement('div');
+        tvDashboard.className = 'oms-tv-dashboard';
+        tvDashboard.style.display = currentViewMode === 'TV' ? 'flex' : 'none';
+        tvDashboard.innerHTML = `
+        <div class="tv-loading-container" style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            width: 100%;
+            font-family: 'Lilita One', cursive;
+            color: #ffffff;
+            text-align: center;
+            margin: auto;
+        ">
+            <div class="tv-loading-spinner" style="
+                width: 65px;
+                height: 65px;
+                border: 5px solid rgba(0, 210, 255, 0.1);
+                border-top: 5px solid var(--neon-blue);
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 25px;
+                box-shadow: 0 0 15px rgba(0, 210, 255, 0.2);
+            "></div>
+            <div style="font-size: 28px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px; background: linear-gradient(90deg, var(--neon-green), var(--neon-blue)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                SINCRONIZANDO MONITOR OPERACIONAL
+            </div>
+            <div style="font-size: 14px; font-weight: 700; color: rgba(255, 255, 255, 0.4); letter-spacing: 2px; text-transform: uppercase;">
+                AGUARDE, COMUNICANDO COM O LINX OMS...
+            </div>
         </div>
     `;
-    dashboard.appendChild(handle);
+        document.body.appendChild(tvDashboard);
 
-    const dashContent = document.createElement('div');
-    dashContent.className = "oms-support-content";
-    dashboard.appendChild(dashContent);
-    document.body.appendChild(dashboard);
-
-
-
-    const toast = document.createElement('div');
-    toast.className = "support-toast";
-    toast.innerText = "CÓDIGO COPIADO!";
-    dashboard.appendChild(toast);
-
-    const audioToggle = handle.querySelector('#oms-audio-toggle');
-    if (audioToggle) {
-        audioToggle.onclick = (e) => {
-            e.stopPropagation();
-            audioMuted = !audioMuted;
-            localStorage.setItem('oms_audio_muted', audioMuted);
-            audioToggle.innerText = audioMuted ? '🔇' : '🔊';
-            audioToggle.style.color = audioMuted ? 'rgba(255,255,255,0.3)' : 'var(--neon-green)';
-
-            initAudio();
-            if (audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-            playSuccessBeep();
-        };
-    }
-
-    // --- ENGINE DE DRAG COM LIMITES DA TELA ---
-    let isDragging = false;
-    let dragTarget = null;
-    let offsetX, offsetY;
-
-    document.addEventListener('mousedown', (e) => {
-        const handle = e.target.closest('.oms-support-handle');
-        if (!handle) return;
-
-        // Evita arrastar quando clica no botão de áudio!
-        if (e.target.closest('#oms-audio-toggle')) return;
-
-        dragTarget = handle.closest('.oms-support-dashboard');
-        if (!dragTarget) return;
-
-        isDragging = true;
-        offsetX = e.clientX - dragTarget.getBoundingClientRect().left;
-        offsetY = e.clientY - dragTarget.getBoundingClientRect().top;
-        handle.style.cursor = 'grabbing';
-        dragTarget.style.transition = 'none';
-        e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-        if (!isDragging || !dragTarget) return;
-
-        let x = e.clientX - offsetX;
-        let y = e.clientY - offsetY;
-
-        x = Math.max(0, Math.min(x, window.innerWidth - dragTarget.offsetWidth));
-        y = Math.max(0, Math.min(y, window.innerHeight - dragTarget.offsetHeight));
-
-        dragTarget.style.left = x + 'px';
-        dragTarget.style.top = y + 'px';
-        dragTarget.style.right = 'auto';
-        dragTarget.style.bottom = 'auto';
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (isDragging && dragTarget) {
-            const handle = dragTarget.querySelector('.oms-support-handle');
-            if (handle) handle.style.cursor = 'move';
-            dragTarget.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-
-            localStorage.setItem('oms_support_top', dragTarget.style.top);
-            localStorage.setItem('oms_support_left', dragTarget.style.left);
+        // Botão para alternar entre os Modos (TV, Apoio, Nativo)
+        const toggleStyle = document.createElement('style');
+        toggleStyle.innerHTML = `
+        /* Status das Integrações */
+        .tv-integrations-status {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            display: flex;
+            gap: 12px;
+            z-index: 250000;
         }
-        isDragging = false;
-        dragTarget = null;
-    });
-
-    // --- SÍNTESE DE AUDIO WEB AUDIO API (SINALIZAÇÕES CRISTALINAS) ---
-    function initAudio() {
-        if (audioCtx) return;
-        try {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            audioCtx = new AudioContextClass();
-        } catch (e) {}
-    }
-
-    function playCopyBeep() {
-        if (audioMuted) return;
-        initAudio();
-        if (!audioCtx || audioCtx.state === 'suspended') return;
-        try {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-            gain.gain.setValueAtTime(0.03, audioCtx.currentTime); // Volume discreto (3%)
-            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.05);
-
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.05);
-        } catch (e) {}
-    }
-
-    function playSuccessBeep() {
-        if (audioMuted) return;
-        initAudio();
-        if (!audioCtx || audioCtx.state === 'suspended') return;
-        try {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(1000, audioCtx.currentTime); // Beep de leitura do scanner
-            gain.gain.setValueAtTime(0.04, audioCtx.currentTime); // 4% volume
-            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.08);
-
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.08);
-        } catch (e) {}
-    }
-
-    function playErrorBuzz() {
-        if (audioMuted) return;
-        initAudio();
-        if (!audioCtx || audioCtx.state === 'suspended') return;
-        try {
-            const osc1 = audioCtx.createOscillator();
-            const osc2 = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc1.type = 'sawtooth';
-            osc1.frequency.setValueAtTime(120, audioCtx.currentTime);
-            osc2.type = 'sawtooth';
-            osc2.frequency.setValueAtTime(122, audioCtx.currentTime);
-
-            gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.35);
-
-            osc1.connect(gain);
-            osc2.connect(gain);
-            gain.connect(audioCtx.destination);
-
-            osc1.start();
-            osc2.start();
-            osc1.stop(audioCtx.currentTime + 0.35);
-            osc2.stop(audioCtx.currentTime + 0.35);
-        } catch (e) {}
-    }
-
-    function playNewOrderChime() {
-        if (audioMuted) return;
-        initAudio();
-        if (!audioCtx || audioCtx.state === 'suspended') return;
-        try {
-            const now = audioCtx.currentTime;
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(587.33, now); // D5
-            osc.frequency.setValueAtTime(880, now + 0.12); // A5
-
-            gain.gain.setValueAtTime(0.04, now);
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
-
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(now + 0.3);
-        } catch (e) {}
-    }
-
-    function playCriticalChime() {
-        if (audioMuted) return;
-        initAudio();
-        if (!audioCtx || audioCtx.state === 'suspended') return;
-        try {
-            const now = audioCtx.currentTime;
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(440, now); // A4
-            osc.frequency.setValueAtTime(349.23, now + 0.15); // F4
-
-            gain.gain.setValueAtTime(0.06, now);
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
-
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(now + 0.4);
-        } catch (e) {}
-    }
-
-    function showScreenFlash(isSuccess) {
-        let flash = document.getElementById('oms-screen-flash');
-        if (!flash) {
-            flash = document.createElement('div');
-            flash.id = 'oms-screen-flash';
-            flash.style.cssText = `
-                position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-                z-index: 1000000; pointer-events: none; opacity: 0;
-                transition: opacity 0.15s ease-out;
-            `;
-            document.body.appendChild(flash);
+        .integration-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(10, 15, 30, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 8px 16px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 900;
+            color: #fff;
+            letter-spacing: 1px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            transition: all 0.3s ease;
         }
-
-        flash.style.background = isSuccess ? 'rgba(0, 255, 136, 0.15)' : 'rgba(255, 62, 62, 0.2)';
-        flash.style.boxShadow = isSuccess ? 'inset 0 0 100px rgba(0, 255, 136, 0.4)' : 'inset 0 0 100px rgba(255, 62, 62, 0.5)';
-        flash.style.opacity = '1';
-
-        setTimeout(() => {
-            flash.style.opacity = '0';
-        }, 300);
-    }
-
-    function triggerStageAction(stageKey) {
-        const el = document.querySelector(STAGES_CONFIG[stageKey].selector);
-        if (el) {
-            el.click();
-        } else {
-            if (stageKey === 'PICKING') {
-                window.location.href = window.location.origin + '/selection';
-            } else if (stageKey === 'SEND_READY_PICKUP') {
-                window.location.href = window.location.origin + '/fulfillments/pickup';
-            } else {
-                window.location.href = window.location.origin + '/';
-            }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
         }
-    }
+        .dot-green { background: #00ff88; box-shadow: 0 0 10px #00ff88; }
+        .dot-red { background: #ff3e3e; box-shadow: 0 0 10px #ff3e3e; animation: heartbeat 1s infinite; }
+        .dot-gray { background: #555; }
 
-    // --- ENHANCERS DE TABELAS GLOBAIS ---
-    function enhanceListPage() {
-        if (window.location.href.includes('/orders/')) return;
-
-        const rows = document.querySelectorAll('table tbody tr');
-        rows.forEach(row => {
-            let carrierText = '';
-            const cells = row.querySelectorAll('td');
-
-            cells.forEach(cell => {
-                const text = cell.innerText.trim();
-                if (text.toLowerCase().includes('retirada em loja') || text.toLowerCase().includes('uber next day') || text.toLowerCase().includes('sedex')) {
-                    carrierText = text;
-                }
-            });
-
-            const transportCell = row.querySelector('.shipping-type') || row.querySelector('[ng-if*="shipping-type"]');
-
-            if (carrierText && transportCell && !transportCell.dataset.omsModified) {
-                const info = parseDeliveryInfo({ domCarrierFallback: carrierText });
-
-                if (info.label.includes('RETIRADA')) {
-                    transportCell.innerHTML = `<b style="color:var(--neon-yellow); background:rgba(0,0,0,0.4); padding:3px 8px; border-radius:6px; font-size:11px; display:inline-block; border:1px solid rgba(241, 196, 15, 0.3);">${info.label}</b>`;
-                } else {
-                    transportCell.innerHTML = `<b style="color:var(--neon-green); background:rgba(0,0,0,0.4); padding:3px 8px; border-radius:6px; font-size:11px; display:inline-block; border:1px solid rgba(0, 255, 136, 0.3);">${info.label}</b>`;
-                }
-                transportCell.dataset.omsModified = "true";
-            }
-
-            cells.forEach(cell => {
-                if (cell.textContent.toLowerCase().includes('uber')) {
-                    cell.style.color = 'var(--neon-red)';
-                    cell.style.fontWeight = 'bold';
-                }
-            });
-        });
-    }
-
-    setInterval(enhanceListPage, 2000);
-
-    // --- LÓGICA OPERACIONAL DE SLA ---
-    function getStoreOpeningTime(date) {
-        const day = date.getDay();
-        const isSunday = (day === 0);
-        const openHour = isSunday ? 12 : 10;
-        const closeHour = isSunday ? 21 : 22;
-        return { openHour, closeHour, isSunday };
-    }
-
-    function getAdjustedStartTime(createdAt) {
-        if (!createdAt) return new Date();
-        let date = new Date(createdAt);
-        if (isNaN(date.getTime())) date = new Date();
-
-        const config = getStoreOpeningTime(date);
-        const currentHour = date.getHours();
-
-        if (currentHour < config.openHour) {
-            date.setHours(config.openHour, 0, 0, 0);
+        .tv-toggle-mode-btn {
+            position: fixed; bottom: 30px; right: 30px; z-index: 250000;
+            background: #111c30 !important; border: 2px solid #00ff88 !important;
+            color: #ffffff !important; padding: 12px 24px !important;
+            border-radius: 30px !important; font-family: var(--font-main) !important;
+            font-size: 14px !important; font-weight: 900 !important; cursor: pointer !important;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4) !important;
+            backdrop-filter: blur(10px) !important; transition: all 0.2s ease !important;
+            letter-spacing: 1px !important; text-transform: uppercase !important;
         }
-        else if (currentHour >= config.closeHour) {
-            date.setDate(date.getDate() + 1);
-            const nextConfig = getStoreOpeningTime(date);
-            date.setHours(nextConfig.openHour, 0, 0, 0);
+        .tv-toggle-mode-btn:hover {
+            background: #00ff88 !important; color: #0b0f19 !important;
+            border-color: #00ff88 !important; transform: translateY(-3px) scale(1.05) !important;
+            box-shadow: 0 15px 30px rgba(0, 255, 136, 0.4) !important;
         }
-        return date;
-    }
-
-    function getSLAInfo(createdAt, isExpress) {
-        const now = new Date();
-        const startTime = getAdjustedStartTime(createdAt);
-
-        if (now < startTime) {
-            return { minutes: 999, text: "🕒 ABER.", cardClass: "bg-card-verde", urgency: 1 };
-        }
-
-        const limit = new Date(startTime.getTime() + (TEMPO_LIMITE_MINUTOS * 60 * 1000));
-        const diff = limit - now;
-        const absDiff = Math.abs(diff);
-        const mins = Math.floor(absDiff / 60000);
-        const secs = Math.floor((absDiff % 60000) / 1000);
-        const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-
-        if (diff < 0) return { minutes: -mins, text: `🚨 -${timeStr}`, cardClass: "bg-card-vermelho", urgency: 3 };
-        if (isExpress || mins < 15) return { minutes: mins, text: `🔥 ${timeStr}`, cardClass: "bg-card-vermelho", urgency: 3 };
-        if (mins < 40) return { minutes: mins, text: `⚠️ ${timeStr}`, cardClass: "bg-card-laranja", urgency: 2 };
-
-        return { minutes: mins, text: `✅ ${timeStr}`, cardClass: "bg-card-verde", urgency: 1 };
-    }
-
-    function getBottleneckInfo(o) {
-        if (!o) return null;
-        const now = new Date();
-        const updated = new Date(o.updatedAt || o.createdAt || now);
-        const diffMins = (now - updated) / 60000;
-
-        const isRetirada = o.isPickup;
-
-        if (o.statusNativo === 'INVOICING' && diffMins > 10) {
-            return { label: '🧾 FATURAMENTO LENTO (>10 MIN)', isCritical: true, color: '#e74c3c' };
-        }
-        if (o.statusNativo === 'INVOICING_FAIL') {
-            return { label: '❌ FALHA NO FATURAMENTO (ERRO)', isCritical: true, color: '#e74c3c' };
-        }
-        if (o.statusNativo === 'PICKING' && diffMins > 30) {
-            return { label: '⏳ SEPARAÇÃO LENTA (>30 MIN)', isCritical: true, color: '#f39c12' };
-        }
-        if (o.statusNativo === 'CHECKED' && diffMins > 15) {
-            return { label: '📢 CONFERIDO: FALTA FATURAR (>15 MIN)', isCritical: true, color: '#f39c12' };
-        }
-        if (o.statusNativo === 'SEND_READY' || o.statusNativo === 'PICKUP_READY' || o.statusNativo === 'PICKUP_PAID') {
-            if (!isRetirada && diffMins > 60) {
-                return { label: '🚨 CRIAR LISTA DE DESPACHO (>60 MIN)', isCritical: true, color: '#9b59b6' };
-            }
-            if (isRetirada && diffMins > 60) {
-                const limitMs = 15 * 24 * 60 * 60 * 1000;
-                const remainingMs = (updated.getTime() + limitMs) - now.getTime();
-                const diffDays = remainingMs / (24 * 60 * 60 * 1000);
-                let label = '';
-                if (diffDays <= 0) {
-                    label = '🚨 RETIRADA EXPIRADA! CANCELAR NO OMS';
-                } else if (diffDays < 1) {
-                    label = `⚠️ ÚLTIMO DIA DE RETIRADA! FALTAM ${Math.ceil(diffDays * 24)}H`;
-                } else {
-                    label = `⏳ RETIRADA PENDENTE: FALTAM ${Math.floor(diffDays)} DIAS`;
-                }
-                return { label: label, isCritical: true, color: '#e67e22' };
-            }
-        }
-        return null;
-    }
-
-    // --- REORGANIZAÇÃO DO PAINEL NATIVO INSTORE ---
-    function updateNativeDOMAlerts(groups) {
-        const firstBox = document.querySelector('.pending.step-box');
-        if (firstBox && firstBox.parentElement) {
-            firstBox.parentElement.classList.add('oms-grid-parent');
-        }
-
-        const nativeMapping = {
-            'WAITING': {
-                selector: '.pending.step-box',
-                color: '#00ff88',
-                numberedTitle: 'ETAPA 1: PENDENTES',
-                emptyBadge: '0',
-                emptyTitle: '🎉 FILA ZERADA',
-                emptySub: 'Nenhum pedido novo pendente no momento.',
-                activeBadge: 'PENDENTES',
-                instruction: '👉 IMPRIMA A LISTA DE SEPARAÇÃO E PROCURE O PRODUTO'
-            },
-            'PICKING': {
-                selector: '.picking.step-box',
-                color: '#f1c40f',
-                numberedTitle: 'ETAPA 2: SEPARAÇÃO',
-                emptyBadge: '0',
-                emptyTitle: '🔍 TUDO COLETADO',
-                emptySub: 'Sem mercadorias pendentes de separação.',
-                activeBadge: 'SEPARAÇÃO',
-                instruction: '👉 COM O PRODUTO EM MÃOS, FAÇA A LEITURA DO CÓDIGO DE BARRAS'
-            },
-            'INVOICING': {
-                selector: '.billing.step-box',
-                color: '#3498db',
-                numberedTitle: 'ETAPA 3: FATURAMENTO',
-                emptyBadge: '0',
-                emptyTitle: '🧾 NOTAS EMITIDAS',
-                emptySub: 'Sem faturamentos pendentes ou erros fiscais.',
-                activeBadge: 'FATURAMENTO',
-                instruction: '👉 AGUARDE O FATURAMENTO AUTOMÁTICO. SE DEMORAR MAIS QUE 1 MINUTO FIQUE ATENTO!'
-            },
-            'CHECKED': {
-                selector: '.preparing.step-box',
-                color: '#e67e22',
-                numberedTitle: 'ETAPA 4: PREPARAR ENTREGA',
-                emptyBadge: '0',
-                emptyTitle: '📦 TUDO PRONTO',
-                emptySub: 'Caixas conferidas e seladas para entrega.',
-                activeBadge: 'PREPARAR ENTREGA',
-                instruction: '👉 FATURADO, IMPRIMA ETIQUETA DE RETIRADA/DECLARAÇÃO DE CONTEÚDO'
-            },
-            'SEND_READY_DELIVERY': {
-                selector: '.shipping.step-box',
-                color: '#9b59b6',
-                numberedTitle: 'ETAPA 5-A: DESPACHO',
-                emptyBadge: '0',
-                emptyTitle: '🚚 EXPEDIÇÃO EM ROTA',
-                emptySub: 'Todos os volumes despachados com a transportadora.',
-                activeBadge: 'EXPEDIÇÃO',
-                instruction: '👉 GERAR LISTA DE DESPACHO IMEDIATAMENTE!'
-            },
-            'SEND_READY_PICKUP': {
-                selector: '.pickup.step-box',
-                color: '#ff3e3e',
-                numberedTitle: 'ETAPA 5-B: RETIRADA',
-                emptyBadge: '0',
-                emptyTitle: '🏪 LOCKER VAZIO',
-                emptySub: 'Todas as sacolas já foram retiradas pelos clientes.',
-                activeBadge: 'RETIRADA',
-                instruction: '👉 COPIE O TELEFONE DO CLIENTE E AVISE QUE O PEDIDO ESTÁ PRONTO'
-            }
-        };
-
-        Object.entries(nativeMapping).forEach(([stageKey, conf]) => {
-            const el = document.querySelector(conf.selector);
-            if (!el) return;
-
-            const list = groups[stageKey] || [];
-            el.style.transition = 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)';
-            el.style.borderRadius = '14px';
-
-            const titleEl = el.querySelector('.description h3');
-            if (titleEl) titleEl.innerText = conf.numberedTitle;
-
-            let infoBox = el.querySelector('.oms-native-info-box');
-            if (!infoBox) {
-                infoBox = document.createElement('div');
-                infoBox.className = 'oms-native-info-box';
-                infoBox.style.cssText = `
-                    margin-top: 12px; padding: 0; background: none !important;
-                    border: none !important; box-shadow: none !important;
-                    font-family: 'Outfit', sans-serif; text-align: left;
-                    z-index: 5; transition: all 0.3s ease; width: 100%;
-                `;
-                el.appendChild(infoBox);
-            }
-
-            let badge = el.querySelector('.oms-native-badge');
-            if (!badge) {
-                badge = document.createElement('span');
-                badge.className = 'oms-native-badge';
-                badge.style.cssText = `
-                    position: absolute; top: 12px; right: 18px;
-                    font-size: 9px; font-weight: 900; padding: 4px 10px;
-                    border-radius: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-                    z-index: 10; font-family: 'Outfit', sans-serif;
-                    letter-spacing: 0.5px; transition: all 0.3s ease;
-                `;
-                el.style.position = 'relative';
-                el.appendChild(badge);
-            }
-
-            if (list.length > 0) {
-                let temUrgente = false;
-                if (stageKey === 'WAITING' || stageKey === 'PICKING') {
-                    temUrgente = list.some(o => {
-                        const delivery = parseDeliveryInfo(o);
-                        const sla = getSLAInfo(o.createdAt, delivery.isExpress);
-                        return sla.urgency >= 2;
-                    });
-                } else {
-                    temUrgente = list.some(o => {
-                        const bottleneck = getBottleneckInfo(o);
-                        return bottleneck && bottleneck.isCritical;
-                    });
-                }
-
-                if (temUrgente) {
-                    el.style.border = '3px solid #ff3e3e';
-                    el.style.boxShadow = '0 0 25px rgba(255, 62, 62, 0.8), inset 0 0 15px rgba(255, 62, 62, 0.2)';
-                    el.classList.add('oms-pulse-red-container');
-                    el.classList.remove('oms-pulse-normal-container');
-                } else {
-                    el.style.border = `3px solid ${conf.color}`;
-                    el.style.boxShadow = `0 0 18px ${conf.color}aa, inset 0 0 8px ${conf.color}33`;
-                    el.classList.add('oms-pulse-normal-container');
-                    el.classList.remove('oms-pulse-red-container');
-                }
-
-                badge.innerText = temUrgente ? `${list.length} 🚨` : `${list.length}`;
-                badge.style.background = temUrgente ? '#ff3e3e' : conf.color;
-                badge.style.color = '#000';
-                badge.style.boxShadow = temUrgente ? '0 0 10px rgba(255,62,62,0.5)' : `0 0 10px ${conf.color}55`;
-
-                let checklistHtml = '';
-                const steps = STAGE_STEPS[stageKey] || [];
-                steps.forEach((stepText, index) => {
-                    const stepKey = `${stageKey}_${index}`;
-                    const isChecked = checklistState[stepKey] === true;
-                    checklistHtml += `
-                        <div class="oms-checklist-item">
-                            <span class="oms-checklist-checkbox ${isChecked ? 'checked' : ''}"
-                                  style="--stage-color:${conf.color};"
-                                  data-checkbox-key="${stepKey}">
-                                ${isChecked ? '✓' : ''}
-                            </span>
-                            <span style="${isChecked ? 'text-decoration: line-through; opacity: 0.5;' : ''}">${stepText}</span>
-                        </div>
-                    `;
-                });
-
-                let subMetricHtml = '';
-                if (stageKey === 'WAITING' || stageKey === 'PICKING') {
-                    let mostUrgentSLA = null;
-                    list.forEach(o => {
-                        const delivery = parseDeliveryInfo(o);
-                        const sla = getSLAInfo(o.createdAt, delivery.isExpress);
-                        if (!mostUrgentSLA || sla.urgency > mostUrgentSLA.urgency || (sla.urgency === mostUrgentSLA.urgency && sla.minutes < mostUrgentSLA.minutes)) {
-                            mostUrgentSLA = sla;
-                        }
-                    });
-                    subMetricHtml = `⏱️ URGENTE: <span style="color:${mostUrgentSLA.urgency >= 2 ? '#ff3e3e' : '#00ff88'}; font-weight: 900;">${mostUrgentSLA.text}</span>`;
-                } else if (stageKey === 'SEND_READY_PICKUP') {
-                    let minDays = 999;
-                    let minDaysText = '';
-                    list.forEach(o => {
-                        const now = new Date();
-                        const readyDate = new Date(o.updatedAt || o.createdAt || now);
-                        const limitMs = 15 * 24 * 60 * 60 * 1000;
-                        const diffMs = (readyDate.getTime() + limitMs) - now.getTime();
-                        const diffDays = diffMs / (24 * 60 * 60 * 1000);
-                        if (diffDays < minDays) {
-                            minDays = diffDays;
-                            if (diffDays <= 0) {
-                                minDaysText = `🚨 EXPIRADO!`;
-                            } else if (diffDays < 1) {
-                                minDaysText = `⚠️ ÚLTIMO DIA (${Math.ceil(diffDays * 24)}h rest.)`;
-                            } else {
-                                minDaysText = `⏳ ${Math.floor(diffDays)} DIAS REST.`;
-                            }
-                        }
-                    });
-                    subMetricHtml = `🏪 MAIS ANTIGO: <span style="color:${minDays < 4 ? '#ff3e3e' : '#ff7979'}; font-weight: 900;">${minDaysText}</span>`;
-                } else {
-                    let totalAtrasados = 0;
-                    list.forEach(o => {
-                        const bottleneck = getBottleneckInfo(o);
-                        if (bottleneck && bottleneck.isCritical) totalAtrasados++;
-                    });
-                    subMetricHtml = `⚠️ GARGALOS: <span style="color:${totalAtrasados > 0 ? '#ff3e3e' : '#00ff88'}; font-weight: 900;">${totalAtrasados}</span>`;
-                }
-
-                const actionLabels = {
-                    'WAITING': '📂 VER PENDENTES',
-                    'PICKING': '⚡ BIPAR PRODUTOS',
-                    'INVOICING': '🧾 CONFERIR NOTAS',
-                    'CHECKED': '📦 EMBALAR PEDIDOS',
-                    'SEND_READY_DELIVERY': '🚚 GERAR DESPACHO',
-                    'SEND_READY_PICKUP': '🏪 ENTREGAR RETIRADA'
-                };
-
-                infoBox.innerHTML = `
-                    <div style="font-size: 24px; font-weight: 900; color: ${conf.color}; text-shadow: 0 0 12px ${conf.color}33; line-height: 1; letter-spacing: -0.5px;">${list.length} ${list.length === 1 ? 'PEDIDO' : 'PEDIDOS'}</div>
-                    <div style="font-size: 11px; font-weight: 700; color: #ffffff; margin-top: 4px; letter-spacing: 0.5px;">${subMetricHtml}</div>
-                    <div class="oms-checklist-container">
-                        ${checklistHtml}
-                    </div>
-                    <button class="oms-checklist-btn" style="--stage-color: ${conf.color}; --stage-color-alpha: ${conf.color}33;" data-action-stage="${stageKey}">
-                        ${actionLabels[stageKey]}
-                    </button>
-                `;
-
-            } else {
-                // Estado Vazio / Tudo limpo para a etapa
-                el.style.border = '2px dashed rgba(255, 255, 255, 0.3)';
-                el.style.boxShadow = 'none';
-                el.classList.remove('oms-pulse-red-container', 'oms-pulse-normal-container');
-
-                badge.innerText = conf.emptyBadge;
-                badge.style.background = 'rgba(255,255,255,0.06)';
-                badge.style.color = '#ffffff';
-                badge.style.boxShadow = 'none';
-
-                infoBox.innerHTML = `
-                    <div style="font-size: 15px; font-weight: 900; color: #ffffff; opacity: 0.85; margin-top: 5px; text-transform: uppercase; letter-spacing: 0.5px; text-shadow: 0 0 10px rgba(255,255,255,0.25);">${conf.emptyTitle}</div>
-                    <div style="font-size: 11px; color: #ffffff; opacity: 0.6; line-height: 1.35; margin-top: 5px; font-weight: 700;">${conf.emptySub}</div>
-                `;
-            }
-        });
-    }
-
-    // --- RENDERIZADOR DO PAINEL DRAWER LATERAL DE SUPORTE ---
-    function renderSupportDashboard(groups) {
-        lastGroupsData = groups;
-        const priority = analyzeSystemPriority(groups);
-
-        let html = '';
-        if (priority.stage) {
-            html += `
-                <div class="oms-drawer-priority-card" style="
-                    background: rgba(255, 255, 255, 0.04);
-                    border-left: 4px solid ${priority.color};
-                    border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-                    display: flex; flex-direction: column; gap: 6px;
-                ">
-                    <div style="font-size:9px; font-weight:900; color:rgba(255,255,255,0.4); letter-spacing:1px; text-transform:uppercase;">🎯 PRÓXIMO PASSO RECOMENDADO</div>
-                    <div style="font-size:12px; font-weight:900; color:#fff; display:flex; align-items:center; gap:6px;">
-                        <span style="display:inline-block; width:6px; height:6px; background:${priority.color}; border-radius:50%; box-shadow:0 0 6px ${priority.color}"></span>
-                        ${priority.title}
-                    </div>
-                    <div style="font-size:10.5px; color:rgba(255,255,255,0.7); font-weight:500; line-height:1.3;">${priority.desc}</div>
-                    <button class="oms-drawer-priority-btn" style="
-                        background: ${priority.color}; color: #000; border: none;
-                        padding: 6px 12px; border-radius: 6px; font-size: 10px;
-                        font-weight: 900; cursor: pointer; text-transform: uppercase;
-                        letter-spacing: 0.5px; width: 100%; transition: all 0.2s ease;
-                        margin-top: 4px; box-shadow: 0 3px 8px ${priority.color}44;
-                        text-align: center;
-                    ">${priority.actionLabel}</button>
-                </div>
-            `;
-        }
-
-        Object.entries(STAGES_CONFIG).forEach(([stageKey, conf]) => {
-            const list = groups[stageKey] || [];
-            const isOpen = activeStageKey === stageKey;
-
-            let stageClass = conf.class;
-            if (list.length > 0) stageClass += ' has-items';
-
-            html += `
-                <div class="support-stage-row ${stageClass} ${isOpen ? 'active' : ''}" data-stage-key="${stageKey}">
-                    <div class="stage-label-group">
-                        <span class="stage-icon">${conf.icon}</span>
-                        <span class="stage-title">${conf.label}</span>
-                    </div>
-                    <span class="stage-count-badge">${list.length}</span>
-                </div>
-                <div class="stage-detail-panel ${isOpen ? 'open' : ''}">
-            `;
-
-            if (list.length === 0) {
-                html += `<div class="support-no-orders">Nenhum pedido nesta fila.</div>`;
-            } else {
-                list.forEach(o => {
-                    const delivery = parseDeliveryInfo(o);
-                    const bottleneck = getBottleneckInfo(o);
-                    const sla = getSLAInfo(o.createdAt, delivery.isExpress);
-
-                    let cardClass = sla.cardClass;
-                    let bottleneckHtml = '';
-
-                    if (bottleneck) {
-                        cardClass = 'bg-card-vermelho';
-                        bottleneckHtml = `<div class="support-bottleneck-label" style="background:${bottleneck.color}22; color:${bottleneck.color}; border: 1px solid ${bottleneck.color}44">⚠️ ${bottleneck.label}</div>`;
-                    }
-
-                    let slaTextHtml = '';
-                    if (stageKey === 'WAITING' || stageKey === 'PICKING') {
-                        slaTextHtml = `<span style="font-weight:900; font-size:11px; color:${sla.urgency >= 2 ? '#ff3e3e' : '#00ff88'}">${sla.text}</span>`;
-                    } else {
-                        const now = new Date();
-                        const updated = new Date(o.updatedAt || o.createdAt || now);
-                        const mins = Math.floor((now - updated) / 60000);
-                        slaTextHtml = `<span style="color:#aaa; font-weight:700">⏳ ${mins}M ATIVO</span>`;
-                    }
-
-                    let idHtml = `<span class="support-card-id" data-copy-id="${o.id}">#${o.id}</span>`;
-                    if (stageKey === 'SEND_READY_PICKUP') {
-                        // Para Lista de Retirada, não coloca data-copy-id para que o clique propague e navegue diretamente ao pedido em vez de copiar!
-                        idHtml = `<span class="support-card-id" style="text-decoration: underline; cursor: pointer;">#${o.id}</span>`;
-                    }
-
-                    html += `
-                        <div class="support-order-card" data-detail-url="${o.detailUrl || ''}">
-                            <div class="support-card-row">
-                                ${idHtml}
-                                ${slaTextHtml}
-                            </div>
-                            <div class="support-card-row" style="margin-top:6px;">
-                                <span class="support-card-desc" style="color:${delivery.isExpress ? 'var(--neon-red)' : 'var(--neon-blue)'}">${delivery.label}</span>
-                                <span class="support-card-items">📦 ${o.itemsCount} ${o.itemsCount === 1 ? 'item' : 'itens'}</span>
-                            </div>
-                            ${bottleneckHtml}
-                            <div class="support-card-customer" style="margin-top:5px; border-top:1px solid rgba(255,255,255,0.03); padding-top:4px;">
-                                👤 ${o.customer}
-                            </div>
-                        </div>
-                    `;
-                });
-            }
-
-            html += `</div>`;
-        });
-
-        // Injeta um Guia de Operação Rápida no rodapé do Drawer para colaboradores novos
-        html += `
-            <div class="oms-drawer-guide-card" style="
-                background: rgba(255, 255, 255, 0.02);
-                border: 1px dashed rgba(255, 255, 255, 0.08);
-                border-radius: 10px; padding: 10px 12px; margin-top: 15px;
-                font-family: 'Outfit', sans-serif;
-            ">
-                <details>
-                    <summary style="font-size: 10px; font-weight: 900; color: var(--neon-blue); cursor: pointer; display: flex; align-items: center; gap: 5px; user-select: none;">
-                        📘 GUIA DE OPERAÇÃO RÁPIDA (COLLAB)
-                    </summary>
-                    <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 10px; color: rgba(255,255,255,0.75); line-height: 1.45;">
-                        <div>
-                            <b style="color:#00ff88">📥 1. PENDENTES:</b><br>
-                            Imprima a lista de separação no Instore e colete as mercadorias no estoque físico da loja.
-                        </div>
-                        <div>
-                            <b style="color:#f1c40f">🔍 2. SEPARAÇÃO:</b><br>
-                            Utilize o leitor de código de barras para bipar e certificar que coletou o produto correto.
-                        </div>
-                        <div>
-                            <b style="color:#3498db">🧾 3. FATURAMENTO:</b><br>
-                            Notas fiscais devem emitir automaticamente. Se travar por mais de 1 min, avise o gerente imediatamente!
-                        </div>
-                        <div>
-                            <b style="color:#e67e22">📦 4. PREPARAR ENTREGA:</b><br>
-                            Confira os itens, embale na caixa ou sacola correta e cole a etiqueta de envio na embalagem.
-                        </div>
-                        <div>
-                            <b style="color:#9b59b6">🚚 5-A. DESPACHO:</b><br>
-                            Entregue para as transportadoras (Uber, Correios) e emita a lista de despacho nativa do sistema.
-                        </div>
-                        <div>
-                            <b style="color:#ff3e3e">🏪 5-B. RETIRADA:</b><br>
-                            Guarde na gôndola de retirada e copie o WhatsApp para notificar que a sacola está pronta para coleta.
-                        </div>
-                    </div>
-                </details>
-            </div>
+        @media print { .tv-toggle-mode-btn { display: none !important; } }
         `;
+        document.head.appendChild(toggleStyle);
 
-        dashContent.innerHTML = html;
+        toggleBtn = document.createElement('button');
+        toggleBtn.className = 'tv-toggle-mode-btn';
 
-        // --- ASSOCIAÇÃO DE EVENTOS DE CLIQUE E LIFECYCLE DO DRAWER ---
-        const rows = dashContent.querySelectorAll('.support-stage-row');
-        rows.forEach(row => {
-            row.onclick = () => {
-                const key = row.dataset.stageKey;
-                activeStageKey = (activeStageKey === key) ? null : key;
-                renderSupportDashboard(groups);
-            };
-        });
-
-        // 1. Clique para copiar ID do pedido
-        const copyTriggers = dashContent.querySelectorAll('[data-copy-id]');
-        copyTriggers.forEach(el => {
-            el.onclick = (e) => {
-                e.stopPropagation();
-                const text = el.dataset.copyId;
-                navigator.clipboard.writeText(text).then(() => {
-                    playCopyBeep();
-                    toast.classList.add('show');
-                    setTimeout(() => toast.classList.remove('show'), 2000);
-                });
-            };
-        });
-
-        // 2. Clique no card para navegar ao pedido nativo
-        const cards = dashContent.querySelectorAll('.support-order-card');
-        cards.forEach(card => {
-            card.onclick = () => {
-                const url = card.dataset.detailUrl;
-                if (url) {
-                    window.location.href = url;
-                }
-            };
-        });
-    }
-
-    // --- REQUISIÇÕES DA API LINX OMS ---
-    async function apiFetch(statuses) {
-        const activeStoreId = getDynamicStoreId() || LOJA_ID;
-        const base = 'https://instore.linxoms.com.br/api/proxy/order-ms/clients/rihappy/fulfillments?';
-        const filter = `filterGroups[1][filters][0][property]=locationId&filterGroups[1][filters][0][condition]=eq&filterGroups[1][filters][0][value]=${activeStoreId}` +
-                       `&filterGroups[1][filters][1][property]=status&filterGroups[1][filters][1][operation]=whereIn&` +
-                       statuses.map(s => `filterGroups[1][filters][1][value][]=${s}`).join('&');
-
-        try {
-            const r = await fetch(base + filter + `&includes[]=order&pageSize=100&_nocache=${Date.now()}`);
-            if (!r.ok) throw new Error(`HTTP Error: ${r.status}`);
-            return await r.json();
-        } catch (e) {
-            console.error("Erro na API Linx OMS:", e);
-            return null;
+        function updateToggleButton() {
+            if (currentViewMode === 'TV') toggleBtn.innerText = '🖥️ Ver OMS Nativo';
+            else toggleBtn.innerText = '📺 Modo TV';
         }
-    }
+        updateToggleButton();
+        document.body.appendChild(toggleBtn);
 
-    function getDeliveryFromDOM(orderId) {
-        if (!orderId) return { carrier: null, type: null, fullId: null };
-        const baseId = String(orderId).replace('#', '').split('-')[0].trim().toLowerCase();
-        const rows = document.querySelectorAll('table tbody tr');
+        integrationsUI = document.createElement('div');
+        integrationsUI.className = 'tv-integrations-status';
+        document.body.appendChild(integrationsUI);
 
-        for (const row of rows) {
-            let rowId = '';
-            const idElement = row.querySelector('.table-order-id span');
-            if (idElement) rowId = idElement.innerText.trim();
-
-            if (rowId.toLowerCase().includes(baseId) || row.innerHTML.toLowerCase().includes(baseId)) {
-                let finalId = orderId;
-                if (rowId && rowId.toLowerCase().includes(baseId)) {
-                    finalId = rowId;
-                } else {
-                    const regex = new RegExp(baseId + '[-_\\.][0-9]+', 'i');
-                    const fullIdMatch = row.innerHTML.match(regex);
-                    if (fullIdMatch) finalId = fullIdMatch[0];
-                }
-
-                let typeText = '';
-                const typeSpan = row.querySelector('.shipping-type');
-                if (typeSpan) typeText = typeSpan.innerText.trim();
-
-                let carrierText = '';
-                const cells = row.querySelectorAll('td');
-                cells.forEach(cell => {
-                    const text = cell.innerText.trim();
-                    if (text.toLowerCase().includes('retirada em loja') || text.toLowerCase().includes('uber next day') || text.toLowerCase().includes('sedex')) {
-                        carrierText = text;
-                    }
-                });
-
-                return { carrier: carrierText || null, type: typeText || null, fullId: finalId };
-            }
-        }
-        return { carrier: null, type: null, fullId: orderId };
-    }
-
-    // --- CONTROLLER PRINCIPAL DE DADOS (SYNC) ---
-    async function check() {
-        let newList = [];
-
-        // Consulta paralela assíncrona
-        const [d1, d2, d3] = await Promise.all([
-            apiFetch(['WAITING']),
-            apiFetch(['SEND_READY', 'PICKUP_READY', 'PICKUP_PAID']),
-            apiFetch(['PICKING','CHECKED','INVOICING','INVOICING_FAIL'])
-        ]);
-
-        const processData = (data) => {
-            if (data?.data) {
-                data.data.forEach(o => {
-                    let orderBaseId = o.order?.id || o.order?.code || o.orderId;
-                    let fulfillSuffix = o.fulfillmentId || o.name || o.code || o.id;
-                    let fullFulfillmentId = fulfillSuffix || orderBaseId;
-
-                    if (orderBaseId && fulfillSuffix && orderBaseId !== fulfillSuffix) {
-                        let suffixStr = fulfillSuffix.toString().replace('-', '');
-                        if (suffixStr.length === 1 && !isNaN(suffixStr)) suffixStr = '0' + suffixStr;
-                        if (suffixStr.length <= 4) {
-                            fullFulfillmentId = orderBaseId + '-' + suffixStr;
-                        } else if (fulfillSuffix.toString().includes(orderBaseId)) {
-                            fullFulfillmentId = fulfillSuffix;
-                        }
-                    }
-                    const domInfo = getDeliveryFromDOM(fullFulfillmentId);
-
-                    const apiCarrier = o.carrier?.tradingName || o.carrier?.companyName || o.order?.carrier?.tradingName || '';
-                    const apiDeliveryType = o.shipment?.method || o.freightMethod?.name || '';
-
-                    const deliveryFallback = parseDeliveryInfo({
-                        carrier: apiCarrier || domInfo.carrier,
-                        deliveryType: apiDeliveryType || domInfo.type,
-                        apiType: o.type || o.fulfillmentType
-                    });
-
-                    let finalId = fullFulfillmentId;
-                    if (domInfo.fullId && domInfo.fullId.length > finalId.length) {
-                         finalId = domInfo.fullId;
-                    }
-
-                    const isPickupOrder = deliveryFallback.isPickup;
-
-                    let detailUrl = '';
-                    if (o.id && o.orderId) {
-                        detailUrl = 'https://instore.linxoms.com.br' + getOrderDetailsUrl(`${o.orderId}-${o.id}`);
-                    } else if (finalId) {
-                        detailUrl = 'https://instore.linxoms.com.br' + getOrderDetailsUrl(finalId);
-                    }
-
-                    newList.push({
-                        id: finalId,
-                        createdAt: o.createdAt || o.order?.createdAt,
-                        updatedAt: o.updatedAt,
-                        customer: o.customer?.fullName || o.order?.customer?.fullName || '---',
-                        deliveryType: deliveryFallback.label,
-                        carrier: apiCarrier || domInfo.carrier || '',
-                        statusNativo: o.status || o.fulfillmentStatus || 'WAITING',
-                        isExpress: deliveryFallback.isExpress,
-                        isPickup: isPickupOrder,
-                        itemsCount: o.items?.length || o.totalItems || 1,
-                        detailUrl: detailUrl
-                    });
-                });
-            }
-        };
-
-        processData(d1);
-        processData(d2);
-        processData(d3);
-
-        pedidosAtivosAtuais = newList;
-
-        // Distribuição nos 6 grupos operacionais do grid
-        const groups = {
-            'WAITING': [], 'PICKING': [], 'INVOICING': [], 'CHECKED': [],
-            'SEND_READY_DELIVERY': [], 'SEND_READY_PICKUP': []
-        };
-
-        newList.forEach(o => {
-            const k = o.statusNativo;
-            if (groups[k]) {
-                groups[k].push(o);
+        function updateIntegrationsStatus() {
+            if (currentViewMode !== 'TV') {
+                integrationsUI.style.display = 'none';
                 return;
             }
-            if (k === 'INVOICING_FAIL') {
-                groups['INVOICING'].push(o);
-                return;
-            }
-            if (k === 'SEND_READY' || k === 'PICKUP_READY' || k === 'PICKUP_PAID') {
-                if (o.isPickup || k === 'PICKUP_READY' || k === 'PICKUP_PAID') {
-                    groups['SEND_READY_PICKUP'].push(o);
-                } else {
-                    groups['SEND_READY_DELIVERY'].push(o);
-                }
-                return;
-            }
-        });
+            integrationsUI.style.display = 'flex';
 
-        // Ordenação de prioridade (SLA mais curto primeiro)
-        const sortSLA = (a, b) => {
-            const da = parseDeliveryInfo(a);
-            const db = parseDeliveryInfo(b);
-            const sa = getSLAInfo(a.createdAt, da.isExpress);
-            const sb = getSLAInfo(b.createdAt, db.isExpress);
-            return sa.urgency !== sb.urgency ? sb.urgency - sa.urgency : sa.minutes - sb.minutes;
-        };
+            const ifoodLast = parseInt(GM_getValue('ifoodLastUpdate', 0), 10);
+            const ifoodLogged = GM_getValue('ifoodLoggedIn', false);
+            const ifoodActive = (Date.now() - ifoodLast) < 60000;
 
-        groups['WAITING'].sort(sortSLA);
-        groups['PICKING'].sort(sortSLA);
+            const rappiLast = parseInt(GM_getValue('rappiLastUpdate', 0), 10);
+            const rappiLogged = GM_getValue('rappiLoggedIn', false);
+            const rappiActive = (Date.now() - rappiLast) < 60000;
 
-        // --- NOTIFICAÇÕES SONORAS INTELIGENTES ---
-        const currentWaitingCount = groups['WAITING']?.length || 0;
-        if (currentWaitingCount > lastWaitingCount && lastWaitingCount !== 0) {
-            playNewOrderChime();
-        }
-        lastWaitingCount = currentWaitingCount;
-
-        let maxUrgencySeen = 0;
-        newList.forEach(o => {
-            const dev = parseDeliveryInfo(o);
-            const sla = getSLAInfo(o.createdAt, dev.isExpress);
-            if (sla.urgency > maxUrgencySeen) {
-                maxUrgencySeen = sla.urgency;
-            }
-        });
-        if (maxUrgencySeen > lastCheckedUrgency && lastCheckedUrgency !== 0) {
-            if (maxUrgencySeen >= 2) {
-                playCriticalChime();
-            }
-        }
-        lastCheckedUrgency = maxUrgencySeen;
-
-        // Atualização da UI
-        updateNativeDOMAlerts(groups);
-        renderSupportDashboard(groups);
-        updateTopStepper(groups);
-    }
-
-    // --- PARSER DE DATAS E HORAS RESILIENTE ---
-    function parseDate(dateStr) {
-        if (!dateStr) return null;
-        const parts = dateStr.trim().split(/[\s/:]+/);
-        if (parts.length < 3) return null;
-        const day = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1;
-        const year = parseInt(parts[2], 10);
-        const hour = parts[3] ? parseInt(parts[3], 10) : 12;
-        const min = parts[4] ? parseInt(parts[4], 10) : 0;
-        return new Date(year, month, day, hour, min);
-    }
-
-    // --- INJEÇÃO DE AVISOS NA PÁGINA INTERNA DE DETALHES DO PEDIDO ---
-    function injectOrderPageAlert() {
-        if (document.getElementById('oms-expiration-alert')) return;
-
-        const resumeEl = document.querySelector('.order-resume');
-        if (!resumeEl) return;
-
-        const isPickup = document.body.innerText.toLowerCase().includes('retirada') ||
-                          document.querySelector('.order-status.pickup_ready') !== null;
-        if (!isPickup) return;
-
-        let readyDate = null;
-
-        const textElements = Array.from(resumeEl.querySelectorAll('td, span, div, p, li'));
-        textElements.forEach(el => {
-            const txt = el.innerText || '';
-            if (txt.includes('Data de entrega cliente:')) {
-                const val = txt.replace('Data de entrega cliente:', '').trim();
-                readyDate = parseDate(val);
-            }
-        });
-
-        if (!readyDate) {
-            const steps = document.querySelectorAll('.order-history-step');
-            steps.forEach(step => {
-                const statusEl = step.querySelector('.order-history-status');
-                const dateEl = step.querySelector('.lead');
-                if (statusEl && dateEl && statusEl.innerText.toLowerCase().includes('separação')) {
-                    readyDate = parseDate(dateEl.innerText);
-                }
-            });
-        }
-
-        if (!readyDate) {
-            textElements.forEach(el => {
-                const txt = el.innerText || '';
-                if (txt.includes('Compra:')) {
-                    const val = txt.replace('Compra:', '').trim();
-                    readyDate = parseDate(val);
-                }
-            });
-        }
-
-        if (!readyDate) return;
-
-        const now = new Date();
-        const diffTime = Math.abs(now - readyDate);
-        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-        let alertColor = 'var(--neon-green)';
-        let alertBg = 'rgba(0, 255, 136, 0.03)';
-        let alertText = `Este pedido está na loja há <b>${diffDays} dias</b> (desde a separação em ${readyDate.toLocaleDateString()}).`;
-        let isCritical = false;
-
-        if (diffDays >= 11) {
-            alertColor = 'var(--neon-red)';
-            alertBg = 'rgba(255, 62, 62, 0.04)';
-            alertText = `🚨 <b>CRÍTICO:</b> Este pedido está na loja há <b>${diffDays} dias</b> e corre <b>alto risco de cancelamento automático</b> (limite de 15 dias)!`;
-            isCritical = true;
-        } else if (diffDays >= 6) {
-            alertColor = 'var(--neon-orange)';
-            alertBg = 'rgba(230, 126, 34, 0.04)';
-            alertText = `⚠️ <b>ATENÇÃO:</b> Este pedido está na loja há <b>${diffDays} dias</b> (separado em ${readyDate.toLocaleDateString()}).`;
-        }
-
-        // Tentar obter dados reais via AngularJS da tela de pedido
-        let customerName = "";
-        let phone = "";
-        try {
-            if (typeof angular !== 'undefined') {
-                const el = angular.element(resumeEl);
-                const scope = el.scope();
-                if (scope) {
-                    const fulfillment = scope.fulfillment || scope.order?.fulfillment || scope.order || scope.item?.fulfillmentItem;
-                    const customer = fulfillment?.customer || fulfillment?.order?.customer || scope.customer;
-                    if (customer) {
-                        customerName = customer.fullName || customer.name || "";
-                        phone = customer.phoneMobile || customer.phone || customer.mobilePhone || "";
-                        if (!phone && Array.isArray(customer.phones)) {
-                            phone = customer.phones[0]?.number || (customer.phones[0]?.ddd ? String(customer.phones[0].ddd) + String(customer.phones[0].number) : "");
-                        }
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn("[OMS Premium] Error reading order details scope:", e);
-        }
-
-        // Fallback DOM para telefone se necessário
-        if (!phone) {
-            const phoneMatch = document.body.innerText.match(/\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/);
-            if (phoneMatch) {
-                phone = phoneMatch[0].replace(/\D/g, '');
-            }
-        }
-
-        // Fallback DOM para nome se necessário
-        if (!customerName || customerName === "CLIENTE" || customerName.length > 50 || customerName.includes('\n')) {
-            // 1. Tentar buscar pelo relacionamento direto DT (Nome) + DD no container da Linx
-            const parentDl = document.querySelector('dl.dl-horizontal.dl-second-col');
-            if (parentDl) {
-                const children = Array.from(parentDl.children);
-                for (let i = 0; i < children.length - 1; i++) {
-                    if (children[i].tagName === 'DT' && children[i].innerText.toLowerCase().includes('nome')) {
-                        const nextSibling = children[i + 1];
-                        if (nextSibling && nextSibling.tagName === 'DD') {
-                            const nameVal = nextSibling.innerText.trim();
-                            if (nameVal && nameVal.length > 2 && nameVal.length < 50 && !/\d/.test(nameVal)) {
-                                customerName = nameVal;
-                                break;
-                            }
-                        }
-                    }
-                }
+            let ifoodDot = 'dot-gray'; let ifoodText = 'iFood: Inativo';
+            if (ifoodActive) {
+                if (ifoodLogged) { ifoodDot = 'dot-green'; ifoodText = 'iFood: Online'; }
+                else { ifoodDot = 'dot-red'; ifoodText = 'iFood: Deslogado'; }
             }
 
-            // 2. Fallback secundário: buscar em tags <dd> excluindo CPF, e-mail e telefones
-            if (!customerName || customerName === "CLIENTE" || customerName.length > 50 || customerName.includes('\n')) {
-                const dds = Array.from(document.querySelectorAll('dd.ng-binding, dl dd, dd'));
-                for (const dd of dds) {
-                    const text = dd.innerText.trim();
-                    if (text && text.length > 2 && text.length < 50 && !text.includes('@') && !/\d/.test(text)) {
-                        customerName = text;
-                        break;
-                    }
-                }
+            let rappiDot = 'dot-gray'; let rappiText = 'Rappi: Inativo';
+            if (rappiActive) {
+                if (rappiLogged) { rappiDot = 'dot-green'; rappiText = 'Rappi: Online'; }
+                else { rappiDot = 'dot-red'; rappiText = 'Rappi: Deslogado'; }
             }
-        }
 
-        if (!customerName || customerName === "CLIENTE" || customerName.length > 50 || customerName.includes('\n')) {
-            const bodyText = document.body.innerText;
-            // 2. Procura pelo padrão "DADOS DO CLIENTE [NOME] CPF:"
-            const match1 = bodyText.match(/DADOS DO CLIENTE\s+([A-Za-zÀ-ÖØ-öø-ÿ\s]{3,50}?)\s+(?:CPF|E-mail|Telefone)/i);
-            if (match1 && match1[1] && !match1[1].includes('\n')) {
-                customerName = match1[1].trim();
-            } else {
-                // 3. Procura pelo padrão "Cliente: [NOME]" ou "Nome: [NOME]" em linhas simples
-                const match2 = bodyText.match(/(?:Cliente|Nome):\s*([A-Za-zÀ-ÖØ-öø-ÿ\s]{3,40})/i);
-                if (match2 && match2[1] && !match2[1].includes('\n')) {
-                    customerName = match2[1].trim();
-                } else {
-                    // 4. Fallback seguro buscando elementos menores no DOM (excluindo containers gigantes)
-                    const tds = Array.from(resumeEl.querySelectorAll('td, span, p, div'));
-                    for (let i = 0; i < tds.length; i++) {
-                        const el = tds[i];
-                        if (el.children.length > 0) continue;
-                        const text = el.innerText || '';
-                        if (text.toLowerCase().includes('cliente:') || text.toLowerCase().includes('nome:')) {
-                            const nameVal = text.replace(/(cliente:|nome:)/gi, '').trim();
-                            if (nameVal && nameVal.length > 2 && nameVal.length < 50 && !nameVal.includes('\n')) {
-                                customerName = nameVal;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (!customerName) {
-            const h1 = document.querySelector('h1, h2, .order-title');
-            if (h1 && !h1.innerText.includes('Pedido')) {
-                customerName = h1.innerText.trim();
-            }
-        }
-        if (!customerName) {
-            customerName = "CLIENTE";
-        }
-
-        // Extrai ID do Pedido robustamente
-        const orderIdMatch = window.location.href.match(/orders\/([^\/]+)(?:\/fulfillments\/([^\/]+))?/);
-        let fullOrderId = "";
-        if (orderIdMatch) {
-            const orderCode = orderIdMatch[1];
-            const fulfillmentId = orderIdMatch[2];
-            fullOrderId = fulfillmentId ? `${orderCode}-${fulfillmentId}` : orderCode;
-        }
-
-        const alertDiv = document.createElement('div');
-        alertDiv.id = 'oms-expiration-alert';
-        alertDiv.style.cssText = `
-            background: rgba(15, 23, 42, 0.95) !important;
-            border: 2.5px solid ${alertColor} !important;
-            border-radius: 16px !important;
-            padding: 24px !important;
-            margin: 25px 0 !important;
-            font-family: 'Outfit', sans-serif !important;
-            box-shadow: 0 12px 32px rgba(0,0,0,0.3) !important;
-            transition: all 0.3s ease !important;
-            position: relative;
-            overflow: hidden;
-            animation: ${isCritical ? 'pulseRedBorder 1.5s infinite ease-in-out' : 'none'} !important;
-        `;
-
-        // Conteúdo formatado de forma premium
-        let contentHtml = `
-            <div style="font-size: 16px; font-weight: 900; color: ${alertColor}; margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase; display: flex; align-items: center; gap: 8px;">
-                ${isCritical ? '🚨 ALERTA DE CANCELAMENTO AUTOMÁTICO!' : '🏪 STATUS DE RETIRADA DO CLIENTE'}
-            </div>
-
-            <div style="font-size: 13px; color: rgba(255,255,255,0.9); margin-bottom: 20px; font-weight: 700; line-height: 1.5;">
-                ${alertText}
-            </div>
-
-            <!-- Painel de Informações do Cliente -->
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px;">
-                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px 16px;">
-                    <div style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 900; text-transform: uppercase; margin-bottom: 4px;">👤 Nome do Cliente</div>
-                    <div style="font-size: 13px; color: #ffffff; font-weight: 900; text-transform: uppercase;">${customerName}</div>
+            integrationsUI.innerHTML = `
+                <div class="integration-pill">
+                    <div class="status-dot ${ifoodDot}"></div>
+                    <div>${ifoodText}</div>
                 </div>
-
-                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px 16px;">
-                    <div style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 900; text-transform: uppercase; margin-bottom: 4px;">📦 Código do Pedido</div>
-                    <div style="font-size: 13px; color: #38bdf8; font-weight: 900;">${fullOrderId || 'N/A'}</div>
-                </div>
-
-                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px 16px;">
-                    <div style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 900; text-transform: uppercase; margin-bottom: 4px;">⏳ Dias Decorridos</div>
-                    <div style="font-size: 13px; color: ${alertColor}; font-weight: 900;">${diffDays} dias na loja</div>
-                </div>
-            </div>
-
-            <div style="background: rgba(255,62,62,0.06); border: 1px dashed rgba(255,62,62,0.3); padding: 14px; border-radius: 10px; color: #ff8b8b; font-weight: 700; font-size: 11.5px; letter-spacing: 0.3px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 20px;">
-                📢 ENVIOU O AVISO AO CLIENTE? Os pedidos ficam no máximo 15 dias na loja antes do cancelamento automático.
-            </div>
-        `;
-
-        alertDiv.innerHTML = contentHtml;
-
-        // Botões de Ação Centralizados e Premium
-        const actionsDiv = document.createElement('div');
-        actionsDiv.style.cssText = 'display: flex; gap: 12px; justify-content: center; margin-top: 20px; flex-wrap: wrap;';
-
-        let whatsappHtml = '';
-        if (phone) {
-            const formattedPhone = phone.startsWith('55') ? phone : '55' + phone;
-            whatsappHtml = `
-                <a href="https://wa.me/${formattedPhone}?text=Ol%C3%A1%2C%20seu%20pedido%20da%20Ri%20Happy%20est%C3%A1%20pronto%20para%20retirada%20na%20nossa%20loja%21%20Aguardamos%20sua%20visita."
-                   target="_blank"
-                   style="background: #25d366; color: #ffffff !important; font-weight: 900; padding: 10px 20px; border-radius: 8px; font-size: 11px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; border: 1px solid #1ebea5; font-family: 'Outfit', sans-serif; box-shadow: 0 4px 12px rgba(37,211,102,0.3); transition: all 0.2s ease; text-transform: uppercase;">
-                   💬 CHAMAR NO WHATSAPP
-                </a>
-            `;
-        }
-
-        let copyIdHtml = '';
-        if (fullOrderId) {
-            copyIdHtml = `
-                <button id="oms-order-detail-copy-btn"
-                        style="background: rgba(255, 255, 255, 0.08); color: #ffffff !important; border: 1px solid rgba(255, 255, 255, 0.2); font-size: 11px; font-weight: 900; padding: 10px 20px; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; font-family: 'Outfit', sans-serif; display: inline-flex; align-items: center; gap: 8px;">
-                   📋 COPIAR ID PEDIDO (${fullOrderId})
-                </button>
-            `;
-        }
-
-        actionsDiv.innerHTML = whatsappHtml + copyIdHtml;
-        alertDiv.appendChild(actionsDiv);
-
-        const copyBtn = actionsDiv.querySelector('#oms-order-detail-copy-btn');
-        if (copyBtn && fullOrderId) {
-            copyBtn.onclick = (e) => {
-                e.stopPropagation();
-                navigator.clipboard.writeText(fullOrderId).then(() => {
-                    playCopyBeep();
-                    copyBtn.innerHTML = '✅ ID COPIADO!';
-                    copyBtn.style.borderColor = 'var(--neon-green)';
-                    copyBtn.style.color = 'var(--neon-green) !important';
-                    setTimeout(() => {
-                        copyBtn.innerHTML = `📋 COPIAR ID PEDIDO (${fullOrderId})`;
-                        copyBtn.style.borderColor = 'rgba(255, 255, 255, 0.2)';
-                        copyBtn.style.color = '#ffffff !important';
-                    }, 1500);
-                });
-            };
-        }
-
-        resumeEl.parentNode.insertBefore(alertDiv, resumeEl);
-    }
-
-    // --- GERADORES DE ALERTAS GLOBAIS DE TOPO DE TELA ---
-    function injectSelectionTopAlert(expiredCount, warningCount) {
-        let alertEl = document.getElementById('oms-selection-top-alert');
-        if (expiredCount === 0 && warningCount === 0) {
-            if (alertEl) alertEl.remove();
-            return;
-        }
-
-        const container = document.querySelector('.page-content, .panel, .table-responsive, table')?.parentElement;
-        if (!container) return;
-
-        if (!alertEl) {
-            alertEl = document.createElement('div');
-            alertEl.id = 'oms-selection-top-alert';
-            container.insertBefore(alertEl, container.firstChild);
-        }
-
-        let alertColor = 'var(--neon-orange)';
-        let alertBg = 'rgba(230, 126, 34, 0.08)';
-        let alertText = `⚠️ <b>ATENÇÃO:</b> Existem <b>${warningCount} pedidos</b> com tempo de separação crítico (menos de 30 minutos restantes)!`;
-        let isCritical = false;
-
-        if (expiredCount > 0) {
-            alertColor = 'var(--neon-red)';
-            alertBg = 'rgba(255, 62, 62, 0.1)';
-            alertText = `🚨 <b>CRÍTICO:</b> Existem <b>${expiredCount} pedidos com tempo de separação VENCIDO</b>! Priorize a coleta destes itens imediatamente para evitar perda de SLA!`;
-            isCritical = true;
-        }
-
-        alertEl.style.cssText = `
-            background: ${alertBg} !important; border: 2.5px solid ${alertColor} !important;
-            border-radius: 12px !important; padding: 18px 24px !important; margin: 15px 0 !important;
-            font-family: 'Outfit', sans-serif !important; text-align: center !important;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.2) !important; transition: all 0.3s ease !important;
-            animation: ${isCritical ? 'pulseRedBorder 1.5s infinite ease-in-out' : 'none'} !important;
-        `;
-
-        alertEl.innerHTML = `
-            <div style="font-size: 15px; font-weight: 900; color: ${alertColor}; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
-                ${isCritical ? '🚨 ALERTA DE SEPARAÇÃO CRÍTICA!' : '⚠️ ALERTA DE COLETA PENDENTE'}
-            </div>
-            <div style="font-size: 13px; color: #ffffff; font-weight: 700;">
-                ${alertText}
-            </div>
-        `;
-    }
-
-    function injectPickupTopAlert(expiredCount, warningCount) {
-        let alertEl = document.getElementById('oms-pickup-top-alert');
-        if (expiredCount === 0 && warningCount === 0) {
-            if (alertEl) alertEl.remove();
-            return;
-        }
-
-        const container = document.querySelector('.page-content, .panel, .table-responsive, table')?.parentElement;
-        if (!container) return;
-
-        if (!alertEl) {
-            alertEl = document.createElement('div');
-            alertEl.id = 'oms-pickup-top-alert';
-            container.insertBefore(alertEl, container.firstChild);
-        }
-
-        let alertColor = 'var(--neon-orange)';
-        let alertBg = 'rgba(230, 126, 34, 0.08)';
-        let alertText = `⚠️ <b>ATENÇÃO:</b> Existem <b>${warningCount} pedidos</b> aguardando retirada há mais de 6 dias. Convém contatar os clientes.`;
-        let isCritical = false;
-
-        if (expiredCount > 0) {
-            alertColor = 'var(--neon-red)';
-            alertBg = 'rgba(255, 62, 62, 0.1)';
-            alertText = `🚨 <b>CRÍTICO:</b> Existem <b>${expiredCount} pedidos aguardando retirada há mais de 11 dias</b>! Alto risco de cancelamento automático (limite de 15 dias). Entre em contato urgente!`;
-            isCritical = true;
-        }
-
-        alertEl.style.cssText = `
-            background: ${alertBg} !important; border: 2.5px solid ${alertColor} !important;
-            border-radius: 12px !important; padding: 18px 24px !important; margin: 15px 0 !important;
-            font-family: 'Outfit', sans-serif !important; text-align: center !important;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.2) !important; transition: all 0.3s ease !important;
-            animation: ${isCritical ? 'pulseRedBorder 1.5s infinite ease-in-out' : 'none'} !important;
-        `;
-
-        alertEl.innerHTML = `
-            <div style="font-size: 15px; font-weight: 900; color: ${alertColor}; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
-                ${isCritical ? '🚨 ALERTA DE CANCELAMENTO DE RETIRADA!' : '⚠️ ALERTA DE RETIRADA PENDENTE'}
-            </div>
-            <div style="font-size: 13px; color: #ffffff; font-weight: 700;">
-                ${alertText}
-            </div>
-        `;
-    }
-
-    // --- FILTROS DE CATEGORIA E BUSCA DA TELA DE RETIRADA ---
-    function injectPickupLegend(container) {
-        if (document.getElementById('oms-pickup-legend-bar')) return;
-
-        const legendBar = document.createElement('div');
-        legendBar.id = 'oms-pickup-legend-bar';
-        legendBar.style.cssText = `
-            background: rgba(20, 20, 20, 0.95);
-            border: 2px dashed rgba(255, 255, 255, 0.1);
-            border-radius: 12px; padding: 14px 20px; margin: 15px 0;
-            font-family: 'Outfit', sans-serif; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-        `;
-
-        legendBar.innerHTML = `
-            <details>
-                <summary style="font-size: 11px; font-weight: 900; color: var(--neon-blue); cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;">
-                    📘 GUIA RÁPIDO DE OPERAÇÃO DA TELA DE RETIRADA (Clique para expandir)
-                </summary>
-                <div style="margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; font-size: 11px; color: rgba(255,255,255,0.7); line-height: 1.45;">
-                    <div>
-                        <strong style="color:var(--neon-green)">🟢 NO PRAZO (0-5 DIAS):</strong><br>
-                        Pacote recém-armazenado. Deixe na gôndola e aguarde a retirada natural pelo cliente.
-                    </div>
-                    <div>
-                        <strong style="color:var(--neon-orange)">⚠️ ATENÇÃO (6-10 DIAS):</strong><br>
-                        Clique no botão verde <b>💬 Chamar WhatsApp</b> para enviar um lembrete amigável e facilitar o comparecimento.
-                    </div>
-                    <div>
-                        <strong style="color:var(--neon-red)">🚨 URGENTE (≥11 DIAS):</strong><br>
-                        Risco iminente de cancelamento automático. Ligue para o cliente e tente salvar a venda!
-                    </div>
-                </div>
-            </details>
-        `;
-
-        container.parentNode.insertBefore(legendBar, container);
-    }
-
-    function applyActivePickupFilter() {
-        const activeBtn = document.querySelector('.oms-pickup-filter-btn.active');
-        if (!activeBtn) return;
-
-        const filterValue = activeBtn.dataset.filter;
-        const rows = document.querySelectorAll('table tbody tr');
-
-        rows.forEach(row => {
-            if (!row.dataset.omsDays) {
-                row.style.display = '';
-                return;
-            }
-            const days = parseInt(row.dataset.omsDays);
-
-            if (filterValue === 'all') {
-                row.style.display = '';
-            } else if (filterValue === 'urgent') {
-                row.style.display = (days >= 11) ? '' : 'none';
-            } else if (filterValue === 'warning') {
-                row.style.display = (days >= 6 && days < 11) ? '' : 'none';
-            } else if (filterValue === 'normal') {
-                row.style.display = (days < 6) ? '' : 'none';
-            }
-        });
-    }
-
-    function injectPickupFilters(container) {
-        if (document.getElementById('oms-pickup-filter-bar')) return;
-
-        const filterBar = document.createElement('div');
-        filterBar.id = 'oms-pickup-filter-bar';
-        filterBar.style.cssText = `
-            background: rgba(20, 20, 20, 0.95);
-            border: 2px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px; padding: 12px 20px; margin: 15px 0;
-            font-family: 'Outfit', sans-serif; display: flex; align-items: center;
-            justify-content: space-between; gap: 15px; flex-wrap: wrap;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-        `;
-
-        filterBar.innerHTML = `
-            <div style="font-size: 11px; font-weight: 900; color: rgba(255, 255, 255, 0.6); letter-spacing: 1px; text-transform: uppercase;">
-                🔍 Filtrar Lista
-            </div>
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <button class="oms-pickup-filter-btn active" data-filter="all" style="
-                    background: rgba(255, 255, 255, 0.2); color: #fff; border: 1px solid rgba(255, 255, 255, 0.5);
-                    padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 900; cursor: pointer; transition: all 0.2s;
-                    font-family: 'Outfit', sans-serif;
-                ">Todos</button>
-                <button class="oms-pickup-filter-btn" data-filter="urgent" style="
-                    background: rgba(255, 62, 62, 0.05); color: var(--neon-red); border: 1px solid rgba(255, 62, 62, 0.2);
-                    padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 900; cursor: pointer; transition: all 0.2s;
-                    font-family: 'Outfit', sans-serif;
-                ">🚨 Urgente (≥11 dias)</button>
-                <button class="oms-pickup-filter-btn" data-filter="warning" style="
-                    background: rgba(230, 126, 34, 0.05); color: var(--neon-orange); border: 1px solid rgba(230, 126, 34, 0.2);
-                    padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 900; cursor: pointer; transition: all 0.2s;
-                    font-family: 'Outfit', sans-serif;
-                ">⚠️ Atenção (6-10 dias)</button>
-                <button class="oms-pickup-filter-btn" data-filter="normal" style="
-                    background: rgba(0, 255, 136, 0.05); color: var(--neon-green); border: 1px solid rgba(0, 255, 136, 0.2);
-                    padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 900; cursor: pointer; transition: all 0.2s;
-                    font-family: 'Outfit', sans-serif;
-                ">✅ No Prazo (0-5 dias)</button>
-            </div>
-        `;
-
-        container.parentNode.insertBefore(filterBar, container);
-
-        // Adicionar eventos de filtragem nos botões
-        const btns = filterBar.querySelectorAll('.oms-pickup-filter-btn');
-        btns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                btns.forEach(b => {
-                    b.style.background = '';
-                    b.style.color = '';
-                    b.style.borderColor = 'rgba(255, 255, 255, 0.2)';
-                    b.classList.remove('active');
-                });
-                btn.classList.add('active');
-
-                // Aplicar estilo de botão ativo sólido e chamativo
-                if (btn.dataset.filter === 'all') {
-                    btn.style.background = 'rgba(255, 255, 255, 0.2)';
-                    btn.style.color = '#ffffff';
-                    btn.style.borderColor = 'rgba(255, 255, 255, 0.5)';
-                } else if (btn.dataset.filter === 'urgent') {
-                    btn.style.background = 'var(--neon-red)';
-                    btn.style.color = '#000000';
-                    btn.style.borderColor = 'var(--neon-red)';
-                } else if (btn.dataset.filter === 'warning') {
-                    btn.style.background = 'var(--neon-orange)';
-                    btn.style.color = '#000000';
-                    btn.style.borderColor = 'var(--neon-orange)';
-                } else if (btn.dataset.filter === 'normal') {
-                    btn.style.background = 'var(--neon-green)';
-                    btn.style.color = '#000000';
-                    btn.style.borderColor = 'var(--neon-green)';
-                }
-
-                applyActivePickupFilter();
-                playCopyBeep();
-            });
-        });
-    }
-
-    // --- DESTAQUE PREMIUM NA LISTA NATIVA DE RETIRADAS ---
-    function enhancePickupListPage() {
-        if (!window.location.href.includes('/fulfillments/pickup')) return;
-
-        const table = document.querySelector('table');
-        if (table && !table.classList.contains('oms-pickup-table')) {
-            table.classList.add('oms-pickup-table');
-            const panel = table.closest('.panel, .page-content');
-            if (panel) panel.classList.add('oms-pickup-panel');
-        }
-
-        const rows = document.querySelectorAll('table tbody tr');
-        if (rows.length === 0) return;
-
-        // Resilient Date Parser
-        function parseResilientDate(text) {
-            if (!text) return null;
-
-            // Tenta dd/mm/yyyy hh:mm ou dd/mm/yyyy
-            let m = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-            if (m) {
-                return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10), 12, 0);
-            }
-
-            // Tenta dd/mm/yy hh:mm ou dd/mm/yy
-            m = text.match(/(\d{2})\/(\d{2})\/(\d{2})/);
-            if (m) {
-                return new Date(2000 + parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10), 12, 0);
-            }
-
-            return null;
-        }
-
-        const now = new Date();
-        let expiredCount = 0;
-        let warningCount = 0;
-
-        rows.forEach(row => {
-            const cells = row.cells;
-            if (cells.length < 2) return;
-
-            // 1. Busca robusta e persistente do ID do Pedido (Código)
-            let orderId = row.dataset.omsOrderId;
-            if (!orderId) {
-                // Tenta encontrar o padrão padrão com hífen (ex: 1187-293849 ou v35656227rihp-01)
-                for (let i = 0; i < cells.length; i++) {
-                    const text = cells[i].innerText.trim();
-                    const match = text.match(/([a-zA-Z0-9]+-[a-zA-Z0-9]+)/);
-                    if (match) {
-                        orderId = match[1];
-                        break;
-                    }
-                }
-
-                // Se não encontrar, busca qualquer número longo sequencial (6 a 15 dígitos)
-                if (!orderId) {
-                    for (let i = 0; i < cells.length; i++) {
-                        const text = cells[i].innerText.trim();
-                        const match = text.match(/(\d{6,15})/);
-                        if (match) {
-                            orderId = match[1];
-                            break;
-                        }
-                    }
-                }
-
-                // Fallback absoluto
-                if (!orderId) {
-                    orderId = cells[1]?.innerText.trim().split('\n')[0] || "PEDIDO";
-                }
-
-                row.dataset.omsOrderId = orderId;
-            }
-
-            // Verificar se os badges visuais já estão presentes na linha
-            const hasSlaBadge = row.querySelector('.oms-sla-badge');
-            const hasOrderIdBadge = row.querySelector('.oms-copy-id-btn');
-
-            // Evitar reprocessamento caso o badge de SLA e do pedido já estejam criados e injetados
-            if (row.dataset.omsProcessedId === orderId && hasSlaBadge && hasOrderIdBadge) {
-                // Mas certifique-se de contar para os alertas no topo
-                const diffDays = parseInt(row.dataset.omsDays || "0", 10);
-                if (diffDays >= 11) {
-                    expiredCount++;
-                } else if (diffDays >= 6) {
-                    warningCount++;
-                }
-                return;
-            }
-
-            // 2. Busca robusta da Data do Pedido
-            let orderDate = null;
-            for (let i = cells.length - 1; i >= 0; i--) {
-                const parsed = parseResilientDate(cells[i].innerText);
-                if (parsed) {
-                    orderDate = parsed;
-                    break;
-                }
-            }
-
-            // Se falhar a data, assume hoje para não quebrar a exibição
-            if (!orderDate) {
-                orderDate = new Date();
-            }
-
-            const diffTime = Math.abs(now - orderDate);
-            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-            row.dataset.omsDays = diffDays;
-            row.dataset.omsProcessedId = orderId;
-
-            if (diffDays >= 11) {
-                expiredCount++;
-            } else if (diffDays >= 6) {
-                warningCount++;
-            }
-
-            // Cores e preenchimento sólido de destaque da linha
-            let rowBg = '#122218'; // Verde Escuro Floresta Sólido
-            let borderColor = 'var(--neon-green)';
-            let badgeText = `✅ NO PRAZO: ${diffDays} DIAS`;
-            let badgeBg = 'rgba(0, 255, 136, 0.85)'; // Sólido preenchido
-            let badgeColor = '#000000'; // Letras pretas em fundo verde brilhante
-            let isUrgent = false;
-
-            if (diffDays >= 11) {
-                rowBg = '#2a1717'; // Vermelho Tijolo Escuro Sólido
-                borderColor = 'var(--neon-red)';
-                badgeText = `🚨 URGENTE! CONTATO URGENTE: ${diffDays} DIAS`;
-                badgeBg = '#ff3e3e'; // Sólido vermelho
-                badgeColor = '#ffffff'; // Letras brancas
-                isUrgent = true;
-            } else if (diffDays >= 6) {
-                rowBg = '#281b10'; // Laranja Bronze Escuro Sólido
-                borderColor = 'var(--neon-orange)';
-                badgeText = `⚠️ ATENÇÃO: CONTATAR CLIENTE (${diffDays} DIAS)`;
-                badgeBg = '#e67e22'; // Sólido laranja
-                badgeColor = '#ffffff'; // Letras brancas
-            }
-
-            // Aplicar realce às células
-            for (let i = 0; i < cells.length; i++) {
-                cells[i].style.setProperty('background', rowBg, 'important');
-                cells[i].style.setProperty('color', '#ffffff', 'important');
-                cells[i].style.setProperty('font-weight', '700', 'important');
-                cells[i].style.transition = 'all 0.3s ease';
-            }
-            cells[0].style.setProperty('box-shadow', `inset 8px 0 0 ${borderColor}`, 'important');
-            cells[0].style.setProperty('border-left', `1px solid ${borderColor}`, 'important');
-
-            // A. Criar o Badge de SLA de Retirada (Sólido e Preenchido!)
-            const badge = document.createElement('div');
-            badge.className = 'oms-sla-badge';
-            badge.style.cssText = `
-                background: ${badgeBg}; color: ${badgeColor}; border: 1px solid ${borderColor};
-                padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 900;
-                text-align: center; letter-spacing: 0.3px; font-family: 'Outfit', sans-serif;
-                box-shadow: 0 4px 10px rgba(0,0,0,0.15); display: inline-block;
-                animation: ${isUrgent ? 'pulseRedBorder 1.5s infinite ease-in-out' : 'none'};
-            `;
-            badge.innerText = badgeText;
-
-            // B. Criar o Badge de Pedido Interativo que copia ao clicar
-            const orderIdBadge = document.createElement('button');
-            orderIdBadge.className = 'oms-copy-id-btn';
-            orderIdBadge.style.cssText = `
-                background: rgba(255, 255, 255, 0.12); color: #ffffff !important;
-                border: 1px solid rgba(255, 255, 255, 0.35); font-size: 10px;
-                font-weight: 900; padding: 4px 8px; border-radius: 6px;
-                cursor: pointer; transition: all 0.2s ease;
-                font-family: 'Outfit', sans-serif; display: inline-flex; align-items: center;
-                gap: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 4px;
-            `;
-            orderIdBadge.innerHTML = `📦 Pedido: ${orderId}`;
-
-            orderIdBadge.onclick = (e) => {
-                e.stopPropagation();
-                navigator.clipboard.writeText(orderId).then(() => {
-                    playCopyBeep();
-                    orderIdBadge.innerHTML = '✅ Copiado!';
-                    orderIdBadge.style.borderColor = 'var(--neon-green)';
-                    orderIdBadge.style.color = 'var(--neon-green) !important';
-                    setTimeout(() => {
-                        orderIdBadge.innerHTML = `📦 Pedido: ${orderId}`;
-                        orderIdBadge.style.borderColor = 'rgba(255, 255, 255, 0.35)';
-                        orderIdBadge.style.color = '#ffffff !important';
-                    }, 1500);
-                });
-            };
-
-            // C. Obter nome do cliente e telefone via AngularJS ou DOM de forma altamente resiliente
-            let customerName = "CLIENTE";
-            let phone = "";
-            let contactDetails = "";
-
-            const angData = getAngularData(row);
-            if (angData) {
-                if (angData.customerName) {
-                    customerName = angData.customerName;
-                }
-                if (angData.phone) {
-                    phone = angData.phone;
-                }
-            }
-
-            // Fallback para buscar telefone no DOM caso não venha do Angular
-            if (!phone) {
-                for (let i = 0; i < cells.length; i++) {
-                    const text = cells[i].innerText.trim();
-                    const phoneMatch = text.match(/\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/);
-                    if (phoneMatch) {
-                        phone = phoneMatch[0].replace(/\D/g, '');
-                        break;
-                    }
-                }
-            }
-
-            // Fallback para buscar nome do cliente no DOM (célula de telefone/detalhes do cliente)
-            let realCustomerCell = null;
-            if (phone) {
-                // Apenas assume célula do cliente se de fato possuir telefone
-                for (let i = 0; i < cells.length; i++) {
-                    if (cells[i].innerText.includes(phone)) {
-                        realCustomerCell = cells[i];
-                        break;
-                    }
-                }
-            }
-
-            if (customerName === "CLIENTE") {
-                // Busca nome na primeira célula candidata que não seja data ou ID de pedido
-                let candidateCell = realCustomerCell || cells[1] || cells[0];
-                if (candidateCell && candidateCell !== cells[1]) {
-                    // NÃO limpamos/modificamos cells[1] (descrição) para não quebrar a lista nativa de produtos!
-                    if (!candidateCell.dataset.omsOriginalText) {
-                        candidateCell.dataset.omsOriginalText = candidateCell.innerText.trim();
-                    }
-                    const originalText = candidateCell.dataset.omsOriginalText;
-                    const textLines = originalText.split('\n').map(l => l.trim()).filter(Boolean);
-
-                    const candidateName = textLines[0];
-                    if (candidateName && !candidateName.includes('/') && !candidateName.includes(':') && !candidateName.includes(orderId)) {
-                        customerName = candidateName;
-                    }
-                    contactDetails = textLines.slice(1).filter(line => !line.includes(orderId) && (!line.includes('-') || !/\d+-\d+/.test(line))).join('\n').trim();
-                }
-            }
-
-            // D. Formatar célula de contato se for uma célula real de cliente (excluindo cells[1] de descrição nativa!)
-            if (realCustomerCell && realCustomerCell !== cells[1]) {
-                if (!realCustomerCell.dataset.omsOriginalText) {
-                    realCustomerCell.dataset.omsOriginalText = realCustomerCell.innerText.trim();
-                }
-                realCustomerCell.innerHTML = '';
-                const containerDiv = document.createElement('div');
-                containerDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px; align-items: flex-start;';
-
-                if (contactDetails) {
-                    const detailsEl = document.createElement('div');
-                    detailsEl.className = 'oms-customer-details';
-                    detailsEl.style.cssText = 'font-size: 11px; color: rgba(255,255,255,0.85); line-height: 1.35; font-weight: 700; margin: 2px 0;';
-                    detailsEl.innerText = contactDetails;
-                    containerDiv.appendChild(detailsEl);
-                }
-
-                realCustomerCell.appendChild(containerDiv);
-            }
-
-            // E. Encontrar a célula de Marcadores baseando-se no cabeçalho ou fallback
-            let marcadoresCell = null;
-            try {
-                const tableEl = row.closest('table');
-                if (tableEl) {
-                    const headers = Array.from(tableEl.querySelectorAll('thead th')).map(th => th.innerText.trim().toLowerCase());
-                    const idx = headers.indexOf('marcadores');
-                    if (idx !== -1) {
-                        marcadoresCell = cells[idx];
-                    }
-                }
-            } catch (e) {}
-
-            if (!marcadoresCell) {
-                // Fallback para buscar ul.list-tags de primeiro nível (não aninhado em sub-tabelas)
-                marcadoresCell = Array.from(cells).find(c => {
-                    const ul = c.querySelector('ul.list-tags');
-                    return ul && !ul.closest('table table'); // Ignora list-tags dentro de sub-tabelas
-                }) || cells[2];
-            }
-
-            if (marcadoresCell) {
-                if (!marcadoresCell.dataset.omsOriginalHtml) {
-                    marcadoresCell.dataset.omsOriginalHtml = marcadoresCell.innerHTML;
-                }
-
-                marcadoresCell.innerHTML = '';
-                const tagsWrapper = document.createElement('div');
-                tagsWrapper.style.cssText = `
-                    display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
-                `;
-
-                // 1. Nome do Cliente
-                const clientNameEl = document.createElement('div');
-                clientNameEl.className = 'oms-customer-name-tag';
-                clientNameEl.style.cssText = 'font-size: 11px; color: #ffffff; font-weight: 900; font-family: "Outfit", sans-serif; text-transform: uppercase; letter-spacing: 0.3px;';
-                clientNameEl.innerHTML = `👤 ${customerName}`;
-                tagsWrapper.appendChild(clientNameEl);
-
-                // 2. Número do Pedido Click-to-Copy
-                tagsWrapper.appendChild(orderIdBadge);
-
-                // 4. Botão "Ver no IHP"
-                const viewIhpBtn = document.createElement('a');
-                viewIhpBtn.className = 'oms-view-ihp-btn';
-                viewIhpBtn.href = getOrderDetailsUrl(orderId);
-                viewIhpBtn.style.cssText = `
-                    background: rgba(56, 189, 248, 0.15); color: #38bdf8 !important;
-                    border: 1px solid rgba(56, 189, 248, 0.4); font-size: 10px;
-                    font-weight: 900; padding: 4px 8px; border-radius: 6px;
-                    text-decoration: none; display: inline-flex; align-items: center;
-                    gap: 5px; font-family: 'Outfit', sans-serif;
-                    transition: all 0.2s ease;
-                `;
-                viewIhpBtn.innerHTML = `🔍 Ver no IHP`;
-                viewIhpBtn.onmouseover = () => {
-                    viewIhpBtn.style.background = 'rgba(56, 189, 248, 0.3)';
-                    viewIhpBtn.style.boxShadow = '0 0 8px rgba(56, 189, 248, 0.4)';
-                };
-                viewIhpBtn.onmouseout = () => {
-                    viewIhpBtn.style.background = 'rgba(56, 189, 248, 0.15)';
-                    viewIhpBtn.style.boxShadow = 'none';
-                };
-                tagsWrapper.appendChild(viewIhpBtn);
-
-                // 5. Bloco Dinâmico de WhatsApp Templates
-                if (phone) {
-                    const formattedPhone = phone.startsWith('55') ? phone : '55' + phone;
-                    const waContainer = document.createElement('div');
-                    waContainer.style.cssText = 'display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; max-width: 210px;';
-
-                    const waLabel = document.createElement('span');
-                    waLabel.style.cssText = 'font-size: 8px; font-weight: 900; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.5px; display: block; width: 100%; margin-bottom: 2px;';
-                    waLabel.innerText = 'Notificar WhatsApp:';
-                    waContainer.appendChild(waLabel);
-
-                    const templates = [
-                        { name: '💬 Novo', text: `Olá! Seu pedido da Ri Happy está pronto para retirada na loja! Aguardamos sua visita.`, color: '#25d366', border: 'rgba(37,211,102,0.4)' },
-                        { name: '⚠️ Lembrete', text: `Olá! Passando para lembrar que seu pedido da Ri Happy está pronto na nossa loja há alguns dias. Evite o cancelamento automático! Aguardamos sua visita.`, color: '#e67e22', border: 'rgba(230,126,34,0.4)' },
-                        { name: '🚨 Crítico', text: `Atenção! Seu pedido da Ri Happy está disponível para retirada no último prazo. Para evitar a devolução e cancelamento do pedido, por favor compareça à loja o quanto antes.`, color: '#ff3e3e', border: 'rgba(255,62,62,0.4)' }
-                    ];
-
-                    templates.forEach(tpl => {
-                        const btn = document.createElement('a');
-                        btn.className = 'oms-whatsapp-btn';
-                        btn.href = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(tpl.text)}`;
-                        btn.target = '_blank';
-                        btn.style.cssText = `
-                            background: rgba(255,255,255,0.03); color: ${tpl.color} !important; font-weight: 900;
-                            padding: 3px 6px; border-radius: 4px; font-size: 9px;
-                            text-decoration: none; display: inline-flex; align-items: center;
-                            gap: 2px; border: 1px solid ${tpl.border}; font-family: 'Outfit', sans-serif;
-                            transition: all 0.2s ease;
-                        `;
-                        btn.innerText = tpl.name;
-                        btn.onmouseover = () => {
-                            btn.style.background = tpl.color;
-                            btn.style.color = '#000000';
-                        };
-                        btn.onmouseout = () => {
-                            btn.style.background = 'rgba(255,255,255,0.03)';
-                            btn.style.color = tpl.color;
-                        };
-                        waContainer.appendChild(btn);
-                    });
-                    tagsWrapper.appendChild(waContainer);
-                }
-
-                // 6. SLA Badge
-                tagsWrapper.appendChild(badge);
-
-                marcadoresCell.appendChild(tagsWrapper);
-            }
-
-            row.dataset.omsHighlighted = "true";
-        });
-
-        // Injeta o alerta de topo no topo da tabela ou seção de conteúdo de retirada
-        injectPickupTopAlert(expiredCount, warningCount);
-
-        // Injeta a barra de filtros logo acima da tabela
-        const topAlert = document.getElementById('oms-pickup-top-alert');
-        if (topAlert) {
-            injectPickupFilters(topAlert);
-            injectPickupLegend(topAlert);
-        } else {
-            const tableWrapper = document.querySelector('.table-responsive') || table;
-            if (tableWrapper) {
-                injectPickupFilters(tableWrapper);
-                injectPickupLegend(tableWrapper);
-            }
-        }
-
-        // Aplica o filtro ativo para garantir que novos registros respeitem a seleção atual
-        applyActivePickupFilter();
-    }
-
-    function updateTopStepper(groups) {
-        const gridParent = document.querySelector('.oms-grid-parent');
-        if (!gridParent) return;
-
-        // Destaque dinâmico do card nativo de despacho (.shipping.step-box)
-        const despachoBox = document.querySelector('.shipping.step-box');
-        if (despachoBox) {
-            const dispatchList = groups['SEND_READY_DELIVERY'] || [];
-            if (dispatchList.length > 0) {
-                // Piscando em vermelho
-                despachoBox.style.setProperty('border', '2.5px solid var(--neon-red)', 'important');
-                despachoBox.style.setProperty('animation', 'pulseRedBorder 1.2s infinite ease-in-out', 'important');
-                despachoBox.style.setProperty('background', 'rgba(255, 62, 62, 0.08)', 'important');
-            } else {
-                // Verde sem piscar
-                despachoBox.style.setProperty('border', '2px solid var(--neon-green)', 'important');
-                despachoBox.style.setProperty('animation', 'none', 'important');
-                despachoBox.style.setProperty('background', 'rgba(0, 255, 136, 0.05)', 'important');
-            }
-        }
-
-        let stepper = document.getElementById('oms-operator-stepper');
-        if (!stepper) {
-            stepper = document.createElement('div');
-            stepper.id = 'oms-operator-stepper';
-            gridParent.parentNode.insertBefore(stepper, gridParent);
-        }
-
-        const priority = analyzeSystemPriority(groups);
-
-        let stepsHtml = '';
-        Object.entries(STAGES_CONFIG).forEach(([stageKey, conf], index) => {
-            const list = groups[stageKey] || [];
-            const isActive = priority.stage === stageKey;
-
-            const badgeColor = list.length > 0 ? conf.color : 'rgba(255, 255, 255, 0.05)';
-            const borderGlow = isActive ? `border-color: ${conf.color} !important; box-shadow: 0 0 15px ${conf.color}aa !important;` : '';
-
-            stepsHtml += `
-                <div class="oms-stepper-step ${isActive ? 'active-step' : ''}" style="${borderGlow} --neon-color: ${conf.color}; --neon-color-alpha: ${conf.color}33;" data-step-key="${stageKey}">
-                    <span class="oms-stepper-step-num">ETAPA ${index + 1}</span>
-                    <span class="oms-stepper-step-label">${conf.icon} ${conf.label}</span>
-                    ${list.length > 0 ? `<span class="oms-stepper-step-badge" style="background:${conf.color} !important; box-shadow:0 0 8px ${conf.color}88 !important;">${list.length}</span>` : ''}
+                <div class="integration-pill">
+                    <div class="status-dot ${rappiDot}"></div>
+                    <div>${rappiText}</div>
                 </div>
             `;
-
-            if (index < Object.keys(STAGES_CONFIG).length - 1) {
-                stepsHtml += `<span class="oms-stepper-connector">➔</span>`;
-            }
-        });
-
-        const activeColor = priority.color || 'var(--neon-green)';
-
-        stepper.className = 'oms-stepper-container';
-        stepper.innerHTML = `
-            <div class="oms-stepper-title">
-                <span>🚦 ESTADO DO FLUXO LOGÍSTICO DA LOJA</span>
-                <span style="color:${activeColor}; font-weight:900;">FOCO: ${priority.title}</span>
-            </div>
-            <div class="oms-stepper-steps">
-                ${stepsHtml}
-            </div>
-            <div class="oms-stepper-action-banner" style="--accent-color: ${activeColor}; --accent-color-alpha: ${activeColor}22;">
-                <div class="oms-stepper-action-info">
-                    <span class="oms-stepper-action-title">🎯 AÇÃO RECOMENDADA</span>
-                    <span class="oms-stepper-action-desc">${priority.desc}</span>
-                </div>
-                ${priority.stage ? `<button class="oms-stepper-action-btn" data-action-stage="${priority.stage}">${priority.actionLabel}</button>` : ''}
-            </div>
-        `;
-    }
-
-    function updateScannerStatusBadge() {
-        if (!window.location.href.includes('/selection')) {
-            const existing = document.getElementById('oms-scanner-status-badge');
-            if (existing) existing.remove();
-            return;
         }
+        setInterval(updateIntegrationsStatus, 3000);
+        updateIntegrationsStatus();
 
-        let badge = document.getElementById('oms-scanner-status-badge');
-        const scannerInput = document.querySelector('input[placeholder*="barra"], input[placeholder*="Bipe"], input[ng-model*="barcode"], input[name*="barcode"], #barcode-input');
 
-        if (!scannerInput) {
-            if (badge) badge.remove();
-            return;
-        }
+        toggleBtn.onclick = () => {
+            if (currentViewMode === 'TV') currentViewMode = 'NATIVE';
+            else currentViewMode = 'TV';
 
-        if (!badge) {
-            badge = document.createElement('div');
-            badge.id = 'oms-scanner-status-badge';
-            badge.style.cssText = `
-                position: fixed; bottom: 20px; right: 20px; z-index: 99999;
-                font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 900;
-                padding: 10px 16px; border-radius: 30px; letter-spacing: 0.8px;
-                display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            `;
-            document.body.appendChild(badge);
-        }
+            tvDashboard.style.display = currentViewMode === 'TV' ? 'flex' : 'none';
 
-        const isFocused = document.activeElement === scannerInput;
-        if (isFocused) {
-            badge.style.background = 'rgba(0, 255, 136, 0.95)';
-            badge.style.color = '#000000';
-            badge.style.border = '2px solid #00ff88';
-            badge.style.boxShadow = '0 0 20px rgba(0, 255, 136, 0.4)';
-            badge.innerHTML = `<span style="display:inline-block; width:8px; height:8px; background:#000; border-radius:50%; animation: pulseNormalBorder 1s infinite alternate;"></span> LEITOR ATIVO (PRONTO PARA BIPAR)`;
-        } else {
-            badge.style.background = 'rgba(255, 62, 62, 0.95)';
-            badge.style.color = '#ffffff';
-            badge.style.border = '2px solid #ff3e3e';
-            badge.style.boxShadow = '0 0 20px rgba(255, 62, 62, 0.4)';
-            badge.innerHTML = `⚠️ CLIQUE NA TELA PARA REATIVAR O LEITOR`;
-        }
-    }
+            updateToggleButton();
 
-    function analyzeSystemPriority(groups) {
-        if (!groups) return { title: 'TUDO EM DIA', desc: '', stage: null, color: '#00ff88', actionLabel: 'Dashboard', url: '/' };
-
-        // 1. Faturamento Travado/Falhou
-        const invoicingOrders = groups['INVOICING'] || [];
-        const invoicingFail = invoicingOrders.some(o => o.statusNativo === 'INVOICING_FAIL');
-        const invoicingSlow = invoicingOrders.some(o => {
-            const diff = (new Date() - new Date(o.updatedAt || o.createdAt)) / 60000;
-            return diff > 10;
-        });
-        if (invoicingFail) {
-            return {
-                title: '❌ FATURAMENTO TRAVADO (ERRO FISCAL)',
-                desc: 'Há pedidos com falha na emissão da Nota Fiscal. Verifique com a gerência!',
-                stage: 'INVOICING',
-                color: '#ff3e3e',
-                actionLabel: 'Ver Faturamento',
-                url: '/'
-            };
-        }
-        if (invoicingSlow) {
-            return {
-                title: '🧾 FATURAMENTO LENTO (>10 MIN)',
-                desc: 'Há pedidos aguardando faturamento há muito tempo. Possível instabilidade fiscal.',
-                stage: 'INVOICING',
-                color: '#3498db',
-                actionLabel: 'Ver Faturamento',
-                url: '/'
-            };
-        }
-
-        // 2. Separação ou Pendentes Críticos
-        const pickingOrders = groups['PICKING'] || [];
-        const waitingOrders = groups['WAITING'] || [];
-        const allPendingColeta = [...pickingOrders, ...waitingOrders];
-
-        let mostUrgentOrder = null;
-        let highestUrgency = 0;
-        let lowestMinutes = 999;
-
-        allPendingColeta.forEach(o => {
-            const dev = parseDeliveryInfo(o);
-            const sla = getSLAInfo(o.createdAt, dev.isExpress);
-            if (sla.urgency > highestUrgency || (sla.urgency === highestUrgency && sla.minutes < lowestMinutes)) {
-                highestUrgency = sla.urgency;
-                lowestMinutes = sla.minutes;
-                mostUrgentOrder = o;
-            }
-        });
-
-        if (highestUrgency >= 2 && mostUrgentOrder) {
-            const dev = parseDeliveryInfo(mostUrgentOrder);
-            const stage = mostUrgentOrder.statusNativo === 'PICKING' ? 'PICKING' : 'WAITING';
-            return {
-                title: highestUrgency === 3 ? '🔥 SLA CRÍTICO DE SEPARAÇÃO!' : '⚠️ PRAZO APERTADO DE SEPARAÇÃO',
-                desc: `Pedido #${mostUrgentOrder.id} (${dev.label}) vence em ${lowestMinutes} min!`,
-                stage: stage,
-                color: highestUrgency === 3 ? '#ff3e3e' : '#e67e22',
-                actionLabel: stage === 'PICKING' ? 'Ir para Separação' : 'Ver Pendentes',
-                url: stage === 'PICKING' ? '/selection' : '/'
-            };
-        }
-
-        // 3. Despacho Atrasado
-        const shippingOrders = groups['SEND_READY_DELIVERY'] || [];
-        const shippingSlow = shippingOrders.some(o => {
-            const diff = (new Date() - new Date(o.updatedAt || o.createdAt)) / 60000;
-            return diff > 60;
-        });
-        if (shippingSlow && shippingOrders.length > 0) {
-            return {
-                title: '🚚 EXPEDIÇÃO EM ROTA LENTA',
-                desc: `Existem ${shippingOrders.length} volumes prontos aguardando lista de despacho!`,
-                stage: 'SEND_READY_DELIVERY',
-                color: '#9b59b6',
-                actionLabel: 'Gerar Despacho',
-                url: '/'
-            };
-        }
-
-        // 4. Checked/Conferido Atrasado (Falta Embalar)
-        const checkedOrders = groups['CHECKED'] || [];
-        const checkedSlow = checkedOrders.some(o => {
-            const diff = (new Date() - new Date(o.updatedAt || o.createdAt)) / 60000;
-            return diff > 15;
-        });
-        if (checkedSlow && checkedOrders.length > 0) {
-            return {
-                title: '📦 PENDENTE EMBALAGEM / ETIQUETA',
-                desc: `Existem ${checkedOrders.length} pedidos conferidos aguardando embalagem há mais de 15 minutos.`,
-                stage: 'CHECKED',
-                color: '#e67e22',
-                actionLabel: 'Abrir Preparação',
-                url: '/'
-            };
-        }
-
-        // 5. Pedidos Novos Pendentes
-        if (waitingOrders.length > 0) {
-            return {
-                title: '📥 NOVOS PEDIDOS PENDENTES',
-                desc: `Há ${waitingOrders.length} novos pedidos pendentes. Imprima a lista e colete os itens!`,
-                stage: 'WAITING',
-                color: '#00ff88',
-                actionLabel: 'Ver Pendentes',
-                url: '/'
-            };
-        }
-
-        // 6. Retirada Crítica (Expirada / Último Dia)
-        const pickupOrders = groups['SEND_READY_PICKUP'] || [];
-        let expiredPickupCount = 0;
-        let warningPickupCount = 0;
-
-        pickupOrders.forEach(o => {
-            const readyDate = new Date(o.updatedAt || o.createdAt);
-            const diffDays = (new Date() - readyDate) / (1000 * 60 * 60 * 24);
-            if (diffDays >= 11) expiredPickupCount++;
-            else if (diffDays >= 6) warningPickupCount++;
-        });
-
-        if (expiredPickupCount > 0) {
-            return {
-                title: '🚨 RETIRADA COM ALTO RISCO DE CANCELAMENTO',
-                desc: `Há ${expiredPickupCount} pedidos aguardando retirada há mais de 11 dias! Contate urgente.`,
-                stage: 'SEND_READY_PICKUP',
-                color: '#ff3e3e',
-                actionLabel: 'Chamar Clientes',
-                url: '/fulfillments/pickup'
-            };
-        }
-
-        if (warningPickupCount > 0) {
-            return {
-                title: '⚠️ RETIRADAS PENDENTES HÁ MAIS DE 6 DIAS',
-                desc: `Existem ${warningPickupCount} sacolas aguardando retirada há mais de 6 dias. Contate os clientes!`,
-                stage: 'SEND_READY_PICKUP',
-                color: '#e67e22',
-                actionLabel: 'Ver Retiradas',
-                url: '/fulfillments/pickup'
-            };
-        }
-
-        if (pickupOrders.length > 0) {
-            return {
-                title: '🏪 RETIRADAS DISPONÍVEIS',
-                desc: `Existem ${pickupOrders.length} sacolas prontas para serem retiradas pelos clientes na loja.`,
-                stage: 'SEND_READY_PICKUP',
-                color: '#ff3e3e',
-                actionLabel: 'Ver Retiradas',
-                url: '/fulfillments/pickup'
-            };
-        }
-
-        // 7. Tudo limpo
-        return {
-            title: '🎉 OPERAÇÃO IMPECÁVEL E EM DIA!',
-            desc: 'Todas as filas estão zeradas ou faturadas no prazo. Excelente trabalho!',
-            stage: null,
-            color: '#00ff88',
-            actionLabel: 'Ver Dashboard',
-            url: '/'
-        };
-    }
-
-    function handleRouting() {
-        // Sincroniza estado da folha de estilo e do drawer lateral em tempo real (sempre ativado)
-        const styleEl = document.getElementById('oms-premium-global-stylesheet');
-        if (styleEl) {
-            styleEl.disabled = false;
-        }
-        const drawerEl = document.getElementById('oms-premium-side-drawer');
-        if (drawerEl) {
-            drawerEl.style.display = 'block';
-        }
-
-        const url = window.location.href;
-        if (url.includes('/orders/') && url.includes('/fulfillments/')) {
-            document.body.classList.add('oms-order-page-active');
-            injectOrderPageAlert();
-        } else {
-            document.body.classList.remove('oms-order-page-active');
-        }
-        if (url.includes('/fulfillments/pickup')) {
-            enhancePickupListPage();
-        }
-        if (url.includes('/selection')) {
-            if (localStorage.getItem('oms-selection-stepper-enabled') === 'false') {
-                localStorage.setItem('oms-selection-stepper-enabled', 'true');
-            }
-            enhanceSelectionPage();
-        }
-        updateScannerStatusBadge();
-    }
-
-    function highlightActiveSelectionStage() {
-        const headerContainer = document.querySelector('#accordions');
-        if (!headerContainer) return;
-
-        const titleEl = headerContainer.querySelector('h1');
-        if (!titleEl) return;
-
-        // Separar texto do título original para evitar destruição de referências
-        let titleTextSpan = document.getElementById('oms-selection-title-text');
-        if (!titleTextSpan) {
-            const originalText = titleEl.innerText.trim();
-            titleEl.innerHTML = '';
-            titleTextSpan = document.createElement('span');
-            titleTextSpan.id = 'oms-selection-title-text';
-            titleTextSpan.innerText = originalText || 'Seleção';
-            titleEl.appendChild(titleTextSpan);
-        }
-
-        // Garantir que o botão antigo de alternância de layout seja removido
-        const oldToggleBtn = document.getElementById('oms-layout-toggle-btn');
-        if (oldToggleBtn) {
-            oldToggleBtn.remove();
-        }
-
-        // Definir as seções
-        const sections = [
-            {
-                id: 'pickingList',
-                title: '1. SEPARAÇÃO',
-                selector: '[data-target="#pickingList"]',
-                badgeSelector: '[data-target="#pickingList"] .badge',
-                color: 'var(--neon-blue)',
-                desc: 'Coletar e bipe de produtos',
-                icon: '📥',
-                instruction: '📥 <b>SEPARAÇÃO ATIVA:</b> Selecione um pedido na lista abaixo ou bipe o código de barras para iniciar a separação física.'
-            },
-            {
-                id: 'billingCheckingList',
-                title: '2. FATURAMENTO',
-                selector: '[data-target="#billingCheckingList"]',
-                badgeSelector: '[data-target="#billingCheckingList"] .badge',
-                color: 'var(--neon-orange)',
-                desc: 'Verificar NF-e e checkout',
-                icon: '🧾',
-                instruction: '🧾 <b>FATURAMENTO ATIVO:</b> Realize a emissão fiscal dos pedidos prontos e resolva eventuais pendências de notas.'
-            },
-            {
-                id: 'billedList',
-                title: '3. PREPARAR ENTREGA',
-                selector: '[data-target="#billedList"]',
-                badgeSelector: '[data-target="#billedList"] .badge',
-                color: 'var(--neon-green)',
-                desc: 'Embalar e colar etiquetas',
-                icon: '📦',
-                instruction: '📦 <b>PREPARAÇÃO ATIVA:</b> Embale os produtos, imprima as etiquetas de envio e prepare as sacolas para retirada/despacho.'
-            }
-        ];
-
-        // --- MODO PREMIUM SEMPRE ATIVADO ---
-        titleTextSpan.innerText = '🎯 Central de Separação & Faturamento';
-        titleTextSpan.style.setProperty('font-size', '20px', 'important');
-        titleTextSpan.style.setProperty('font-weight', '900', 'important');
-        titleTextSpan.style.setProperty('color', '#1e293b', 'important');
-
-        // Atualizar contadores e estado de expansão
-        sections.forEach(s => {
-            const badgeEl = document.querySelector(s.badgeSelector);
-            s.count = badgeEl ? parseInt(badgeEl.innerText.trim(), 10) || 0 : 0;
-
-            const headerEl = document.querySelector(s.selector);
-            s.isExpanded = headerEl ? (headerEl.getAttribute('aria-expanded') === 'true' || !headerEl.classList.contains('collapsed')) : false;
-
-            // Estilizar cabeçalhos
-            if (headerEl) {
-                headerEl.style.setProperty('transition', 'all 0.3s ease', 'important');
-                headerEl.style.setProperty('border-radius', '10px', 'important');
-                headerEl.style.setProperty('padding', '14px 20px', 'important');
-                headerEl.style.setProperty('margin-bottom', '8px', 'important');
-                headerEl.style.setProperty('border', s.isExpanded ? `2px solid ${s.color}` : '1px solid rgba(0, 0, 0, 0.08)', 'important');
-                headerEl.style.setProperty('background', s.isExpanded ? 'linear-gradient(135deg, #111827 0%, #1f2937 100%)' : '#f8fafc', 'important');
-
-                const titleTextEl = headerEl.querySelector('h2');
-                if (titleTextEl) {
-                    titleTextEl.style.setProperty('margin', '0', 'important');
-                    titleTextEl.style.setProperty('font-size', '14px', 'important');
-                    titleTextEl.style.setProperty('font-weight', '900', 'important');
-                    titleTextEl.style.setProperty('color', s.isExpanded ? '#ffffff' : '#334155', 'important');
-                }
-
-                const nativeBadge = headerEl.querySelector('.badge');
-                if (nativeBadge) {
-                    nativeBadge.style.setProperty('background', s.count > 0 ? s.color : 'rgba(0, 0, 0, 0.06)', 'important');
-                    nativeBadge.style.setProperty('color', s.count > 0 ? '#000000' : '#475569', 'important');
-                    nativeBadge.style.setProperty('font-weight', '900', 'important');
-                    nativeBadge.style.setProperty('font-size', '11px', 'important');
-                    nativeBadge.style.setProperty('padding', '4px 8px', 'important');
-                    nativeBadge.style.setProperty('box-shadow', s.count > 0 ? `0 0 10px ${s.color}` : 'none', 'important');
-                }
-            }
-        });
-
-        // Injetar ou atualizar o Stepper de Controle do Topo
-        let topStepper = document.getElementById('oms-selection-top-stepper');
-        if (!topStepper) {
-            topStepper = document.createElement('div');
-            topStepper.id = 'oms-selection-top-stepper';
-            headerContainer.insertBefore(topStepper, titleEl.nextSibling);
-        }
-
-        if (topStepper) {
-            topStepper.style.cssText = `
-                display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;
-                margin: 15px 0 25px 0; font-family: 'Outfit', sans-serif;
-            `;
-
-            topStepper.innerHTML = sections.map((s, index) => {
-                const bg = s.isExpanded ? `linear-gradient(135deg, #111827 0%, #1f2937 100%)` : `#f8fafc`;
-                const border = s.isExpanded ? `2px solid ${s.color}` : `1px solid rgba(0, 0, 0, 0.08)`;
-                const textTitleColor = s.isExpanded ? '#ffffff' : '#334155';
-                const textDescColor = s.isExpanded ? 'rgba(255, 255, 255, 0.6)' : '#64748b';
-                const glow = s.isExpanded ? `0 4px 15px rgba(0, 0, 0, 0.15)` : `none`;
-
-                return `
-                    <div class="oms-stepper-tab" data-stage-id="${s.id}" style="
-                        background: ${bg}; border: ${border}; box-shadow: ${glow};
-                        padding: 12px 16px; border-radius: 12px; cursor: pointer;
-                        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                        display: flex; flex-direction: column; justify-content: space-between;
-                        position: relative; overflow: hidden; transform: ${s.isExpanded ? 'scale(1.02)' : 'scale(1)'};
-                    ">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
-                            <div>
-                                <span style="font-size: 8px; font-weight: 900; color: ${s.color}; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 2px;">Etapa ${index + 1}</span>
-                                <span style="font-size: 13px; font-weight: 900; color: ${textTitleColor};">${s.icon} ${s.title.split('. ')[1]}</span>
-                            </div>
-                            <span style="
-                                background: ${s.count > 0 ? s.color : 'rgba(0, 0, 0, 0.06)'};
-                                color: ${s.count > 0 ? '#000000' : '#475569'};
-                                font-size: 10px; font-weight: 900; padding: 3px 8px; border-radius: 20px;
-                                box-shadow: ${s.count > 0 ? `0 0 8px ${s.color}` : 'none'};
-                            ">
-                                ${s.count} Pedido${s.count !== 1 ? 's' : ''}
-                            </span>
-                        </div>
-                        <div style="font-size: 10px; color: ${textDescColor}; font-weight: 700; line-height: 1.3;">
-                            ${s.desc}
-                        </div>
-                        ${s.isExpanded ? `<div style="position: absolute; bottom: 0; left: 0; width: 100%; height: 3px; background: ${s.color}; box-shadow: 0 0 10px ${s.color};"></div>` : ''}
-                    </div>
-                `;
-            }).join('');
-
-            topStepper.querySelectorAll('.oms-stepper-tab').forEach(tab => {
-                tab.addEventListener('click', (e) => {
-                    const stageId = tab.dataset.stageId;
-                    const section = sections.find(s => s.id === stageId);
-                    if (section) {
-                        const headerEl = document.querySelector(section.selector);
-                        if (headerEl) {
-                            headerEl.click();
-                            playCopyBeep();
-                            setTimeout(highlightActiveSelectionStage, 350);
-                        }
-                    }
-                });
-            });
-        }
-
-        // Injetar ou atualizar o guia operacional
-        const activeSection = sections.find(s => s.isExpanded);
-        if (activeSection) {
-            let guideBanner = document.getElementById('oms-selection-guide-banner');
-            if (!guideBanner) {
-                guideBanner = document.createElement('div');
-                guideBanner.id = 'oms-selection-guide-banner';
-                topStepper.parentNode.insertBefore(guideBanner, topStepper.nextSibling);
-            }
-
-            guideBanner.style.cssText = `
-                background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
-                border: 2px solid ${activeSection.color};
-                border-radius: 12px; padding: 14px 18px; margin: 0 0 20px 0;
-                font-family: 'Outfit', sans-serif; box-shadow: 0 8px 20px rgba(0,0,0,0.15);
-                color: #ffffff; animation: pulseGlowBorder 2s infinite ease-in-out;
-                transition: all 0.3s ease;
-            `;
-
-            guideBanner.innerHTML = `
-                <div style="display: flex; align-items: center; justify-content: space-between; gap: 15px;">
-                    <div>
-                        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: rgba(255,255,255,0.4); font-weight: 900; margin-bottom: 2px;">Direcionamento Operacional</div>
-                        <div style="font-size: 12px; font-weight: 700; color: #ffffff; line-height: 1.45;">
-                            ${activeSection.instruction}
-                        </div>
-                    </div>
-                    <div style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 5px 10px; border-radius: 6px; text-align: center; min-width: 120px;">
-                        <span style="font-size: 8px; font-weight: 900; display: block; color: rgba(255,255,255,0.5); margin-bottom: 1px;">ETAPA ATUAL</span>
-                        <span style="font-size: 10px; font-weight: 900; color: ${activeSection.color}; letter-spacing: 0.5px;">🎯 ${activeSection.title.split('. ')[1]}</span>
-                    </div>
-                </div>
-            `;
-        } else {
-            const guideBanner = document.getElementById('oms-selection-guide-banner');
-            if (guideBanner) guideBanner.remove();
-        }
-    }
-
-    function enhanceSelectionPage() {
-        // Encontra e destaca as abas de etapas ativas com design premium
-        highlightActiveSelectionStage();
-
-        const rows = document.querySelectorAll('table tbody tr');
-        if (rows.length === 0) return;
-
-        const now = new Date();
-        let expiredCount = 0;
-        let warningCount = 0;
-
-        rows.forEach(row => {
-            const cells = row.cells;
-            if (cells.length < 3) return;
-
-            let rowId = cells[0].innerText.trim() + '-' + cells[1].innerText.trim();
-
-            let orderDate = null;
-            cells.forEach(cell => {
-                const text = cell.innerText.trim();
-                const match = text.match(/(\d{2})\/(\d{2})\/(\d{2,4})\s*(\d{2}):(\d{2})/);
-                if (match) {
-                    const d = parseInt(match[1], 10);
-                    const m = parseInt(match[2], 10) - 1;
-                    const y = match[3].length === 2 ? 2000 + parseInt(match[3], 10) : parseInt(match[3], 10);
-                    const hh = parseInt(match[4], 10);
-                    const mm = parseInt(match[5], 10);
-                    orderDate = new Date(y, m, d, hh, mm);
-                }
-            });
-
-            if (orderDate) {
-                const limitDate = new Date(orderDate.getTime() + (50 * 60 * 1000)); // Limite de 50 minutos
-                const diffMs = limitDate - now;
-                if (diffMs <= 0) {
-                    expiredCount++;
-                } else if (diffMs < 30 * 60 * 1000) {
-                    warningCount++;
-                }
-            }
-
-            if (row.dataset.omsSelectionProcessed === rowId) {
-                updateRowCountdown(row);
-                return;
-            }
-            row.dataset.omsSelectionProcessed = rowId;
-
-            let carrierText = '';
-            cells.forEach(cell => {
-                const text = cell.innerText.trim();
-                if (text.toLowerCase().includes('retirada') || text.toLowerCase().includes('uber') || text.toLowerCase().includes('sedex') || text.toLowerCase().includes('entrega')) {
-                    carrierText = text;
-                }
-            });
-
-            const isUber = carrierText.toLowerCase().includes('uber');
-
-            if (isUber) {
-                for (let i = 0; i < cells.length; i++) {
-                    cells[i].style.setProperty('background', 'rgba(255, 62, 62, 0.08)', 'important');
-                    cells[i].style.setProperty('color', '#ffffff', 'important');
-                }
-                cells[0].style.setProperty('box-shadow', 'inset 8px 0 0 #ff3e3e', 'important');
-                cells[0].style.setProperty('border-left', '1px solid #ff3e3e', 'important');
-
-                const idCell = cells[0];
-                if (idCell && !idCell.querySelector('.oms-uber-badge')) {
-                    const badge = document.createElement('span');
-                    badge.className = 'oms-uber-badge';
-                    badge.style.cssText = `
-                        background: #ff3e3e; color: #fff; font-size: 9px; font-weight: 900;
-                        padding: 2px 6px; border-radius: 4px; margin-left: 8px;
-                        box-shadow: 0 0 8px rgba(255,62,62,0.4); display: inline-block;
-                        vertical-align: middle; font-family: 'Outfit', sans-serif;
-                    `;
-                    badge.innerText = '⚡ UBER';
-                    idCell.appendChild(badge);
-                }
-            }
-
-            if (orderDate) {
-                row.dataset.omsOrderTime = orderDate.getTime();
-
-                let statusCell = cells[cells.length - 1];
-                if (statusCell) {
-                    let timerBadge = statusCell.querySelector('.oms-sla-timer-badge');
-                    if (!timerBadge) {
-                        timerBadge = document.createElement('div');
-                        timerBadge.className = 'oms-sla-timer-badge';
-                        timerBadge.style.cssText = `
-                            margin-top: 5px; font-size: 10px; font-weight: 900;
-                            padding: 4px 8px; border-radius: 6px; display: inline-block;
-                            font-family: 'Outfit', sans-serif; letter-spacing: 0.3px;
-                            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-                        `;
-                        statusCell.appendChild(timerBadge);
-                    }
-                }
-                updateRowCountdown(row);
-            }
-        });
-
-        // Injeta o alerta de topo no topo da tabela ou seção de conteúdo de separação
-        injectSelectionTopAlert(expiredCount, warningCount);
-
-        // Autofocus Lock no Campo de Entrada do Scanner
-        const scannerInput = document.querySelector('input[placeholder*="barra"], input[placeholder*="Bipe"], input[ng-model*="barcode"], input[name*="barcode"], #barcode-input');
-        if (scannerInput && !scannerInput.dataset.omsFocused) {
-            scannerInput.dataset.omsFocused = "true";
-
-            scannerInput.style.border = '2px solid rgba(0, 255, 136, 0.4)';
-            scannerInput.style.boxShadow = '0 0 10px rgba(0, 255, 136, 0.1)';
-
-            scannerInput.addEventListener('focus', updateScannerStatusBadge);
-            scannerInput.addEventListener('blur', () => {
-                updateScannerStatusBadge();
-                setTimeout(() => {
-                    const activeEl = document.activeElement;
-                    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.closest('.modal-content'))) {
-                        return;
-                    }
-                    scannerInput.focus();
-                }, 150);
-            });
-
-            scannerInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    playSuccessBeep();
-                    showScreenFlash(true);
-                }
-            });
-        }
-
-        // Monitor de Erros Globais do Angular para Bip de Erro (Buzz)
-        const errorNotifier = document.querySelector('.alert-danger, .toast-error, .notification-error, [class*="error-message"], .alert-danger-box');
-        if (errorNotifier && !errorNotifier.dataset.omsBuzzTriggered) {
-            errorNotifier.dataset.omsBuzzTriggered = "true";
-            playErrorBuzz();
-            showScreenFlash(false);
-            setTimeout(() => {
-                if (errorNotifier) errorNotifier.dataset.omsBuzzTriggered = "";
-            }, 5000);
-        }
-    }
-
-    function updateRowCountdown(row) {
-        const timeVal = row.dataset.omsOrderTime;
-        if (!timeVal) return;
-
-        const orderDate = new Date(parseInt(timeVal));
-        const now = new Date();
-
-        const limitDate = new Date(orderDate.getTime() + (50 * 60 * 1000)); // Limite de 50 minutos para separação
-        const diffMs = limitDate - now;
-        const absDiff = Math.abs(diffMs);
-        const mins = Math.floor(absDiff / 60000);
-
-        const timerBadge = row.querySelector('.oms-sla-timer-badge');
-        if (!timerBadge) return;
-
-        if (diffMs > 0) {
-            if (mins >= 30) {
-                timerBadge.style.background = 'rgba(0, 255, 136, 0.15)';
-                timerBadge.style.color = '#00ff88';
-                timerBadge.style.border = '1px solid rgba(0, 255, 136, 0.3)';
-                timerBadge.innerText = `⏱️ FALTAM ${mins} MIN`;
-            } else {
-                timerBadge.style.background = 'rgba(230, 126, 34, 0.15)';
-                timerBadge.style.color = '#e67e22';
-                timerBadge.style.border = '1px solid rgba(230, 126, 34, 0.3)';
-                timerBadge.innerText = `⚠️ RESTAM ${mins} MIN`;
-            }
-        } else {
-            timerBadge.style.background = 'rgba(255, 62, 62, 0.15)';
-            timerBadge.style.color = '#ff3e3e';
-            timerBadge.style.border = '1px solid rgba(255, 62, 62, 0.3)';
-            timerBadge.innerText = `🚨 VENCIDO HÁ ${mins} MIN`;
-
-            if (!timerBadge.classList.contains('oms-pulse-red')) {
-                timerBadge.style.animation = 'pulseRedBorder 1.5s infinite ease-in-out';
-            }
-        }
-    }
-
-    // --- SISTEMA GLOBAL DE DELEGAÇÃO DE EVENTOS DE CLIQUE ---
-    document.addEventListener('click', (e) => {
-        // 1. Clique nos checkboxes da lista (ou em qualquer lugar da linha do checklist)
-        const checklistItem = e.target.closest('.oms-checklist-item');
-        if (checklistItem) {
-            e.stopPropagation();
-            const checkbox = checklistItem.querySelector('.oms-checklist-checkbox');
-            if (checkbox) {
-                const key = checkbox.dataset.checkboxKey;
-                checklistState[key] = !checklistState[key];
-                localStorage.setItem('oms_checklist_state', JSON.stringify(checklistState));
-
-                checkbox.classList.toggle('checked');
-                checkbox.innerText = checklistState[key] ? '✓' : '';
-                const textEl = checkbox.nextElementSibling;
-                if (textEl) {
-                    textEl.style.textDecoration = checklistState[key] ? 'line-through' : 'none';
-                    textEl.style.opacity = checklistState[key] ? '0.5' : '1';
-                }
-                playCopyBeep();
-            }
-            return;
-        }
-
-        // 2. Clique nos botões de ação das etapas (checklist)
-        const actionBtn = e.target.closest('.oms-checklist-btn');
-        if (actionBtn) {
-            e.stopPropagation();
-            const stageKey = actionBtn.dataset.actionStage;
-            triggerStageAction(stageKey);
-            return;
-        }
-
-        // 3. Clique nos botões de ação do stepper
-        const stepperBtn = e.target.closest('.oms-stepper-action-btn');
-        if (stepperBtn) {
-            e.stopPropagation();
-            const stageKey = stepperBtn.dataset.actionStage;
-            triggerStageAction(stageKey);
-            return;
-        }
-
-        // 4. Clique nos botões de ação dos passos do stepper
-        const stepperStep = e.target.closest('.oms-stepper-step');
-        if (stepperStep) {
-            e.stopPropagation();
-            const stageKey = stepperStep.dataset.stepKey;
-            triggerStageAction(stageKey);
-            return;
-        }
-
-        // 5. Clique no botão de prioridade do Drawer
-        const drawerBtn = e.target.closest('.oms-drawer-priority-btn');
-        if (drawerBtn) {
-            e.stopPropagation();
-            const priority = analyzeSystemPriority(lastGroupsData);
-            if (priority.stage) {
-                triggerStageAction(priority.stage);
-            }
-            return;
-        }
-    });
-
-    // --- LÓGICA DE DETECÇÃO DE INATIVIDADE (MODO ECONOMIA) ---
-    let lastActivityTime = Date.now();
-    let isUserIdle = false;
-    const IDLE_TIMEOUT = 10 * 60 * 1000; // 10 minutos
-    let lastIdleCheckTime = 0;
-
-    function resetActivity() {
-        lastActivityTime = Date.now();
-        if (isUserIdle) {
-            isUserIdle = false;
-            console.log("[OMS Premium] Operador ativo detectado! Restaurando atualização em tempo real (3s).");
-            const badge = document.getElementById('oms-scanner-status-badge');
-            if (badge) {
-                badge.style.opacity = '1';
-                badge.innerHTML = '🟢 MONITOR PREMIUM ATIVO';
-            }
-            check();
-        }
-    }
-
-    window.addEventListener('mousemove', resetActivity);
-    window.addEventListener('keydown', resetActivity);
-    window.addEventListener('click', resetActivity);
-    window.addEventListener('scroll', resetActivity);
-
-    function runCheckTick() {
-        const now = Date.now();
-        if (now - lastActivityTime > IDLE_TIMEOUT) {
-            if (!isUserIdle) {
-                isUserIdle = true;
-                console.log("[OMS Premium] Operador ausente há 10+ min. Entrando em Modo Econômico (15s).");
-                const badge = document.getElementById('oms-scanner-status-badge');
-                if (badge) {
-                    badge.style.opacity = '0.6';
-                    badge.innerHTML = '🌙 MODO ECONÔMICO (AUSENTE)';
-                }
-            }
-            if (now - lastIdleCheckTime >= 15000) {
-                lastIdleCheckTime = now;
+            if (currentViewMode !== 'NATIVE') {
+                initAudio();
                 check();
             }
-        } else {
-            lastIdleCheckTime = now;
-            check();
-        }
-    }
+        };
 
-    // --- WORKER DE THROTTLING DE SEGUNDO PLANO ---
-    const workerBlob = new Blob([`
+        // Overlay de Ativação do Áudio Inicial (Chrome AutoPlay Bypass)
+        audioOverlay = document.createElement('div');
+        audioOverlay.className = 'tv-audio-overlay';
+        audioOverlay.innerHTML = `
+        <div style="max-width: 600px; padding: 20px;">
+            <div style="font-size: 54px; margin-bottom: 20px;">📺🔊</div>
+            <h1 style="font-size: 32px; font-weight: 900; margin-bottom: 15px; color:#fff;">SISTEMA OPERACIONAL DA TV</h1>
+            <p style="font-size: 18px; color: rgba(255,255,255,0.7); margin-bottom: 30px; line-height:1.5;">O navegador exige um clique inicial na tela para autorizar os avisos sonoros de novos pedidos.</p>
+            <button class="tv-audio-button">ATIVAR ÁUDIO & INICIAR</button>
+        </div>
+    `;
+        document.body.appendChild(audioOverlay);
+
+        audioOverlay.onclick = () => {
+            initAudio();
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            playStartupChime(); // Lindo chime arpejado de confirmação
+            audioOverlay.style.display = 'none';
+        };
+
+        // --- PARSER E ENGINE DE ENTREGAS ---
+        function parseDeliveryInfo(p) {
+            const carrierText = String(p.carrier || p.domCarrierFallback || '').toLowerCase();
+            const typeText = String(p.deliveryType || '').toLowerCase();
+            const apiType = String(p.apiType || '').toUpperCase();
+
+            const isPickup = apiType === 'PICKUP' || carrierText.includes('retirada') || carrierText.includes('loja') || typeText.includes('retirada') || typeText.includes('loja');
+            const isExpress = carrierText.includes('uber') || typeText.includes('express') || typeText.includes('3 horas');
+
+            if (isPickup) {
+                return { label: '🏪 RETIRADA LOJA', isExpress: false, isPickup: true };
+            }
+
+            let labelName = p.carrier || p.deliveryType || 'ENTREGA';
+            if (carrierText.includes('uber')) labelName = 'UBER';
+            if (carrierText.includes('sedex')) labelName = 'SEDEX';
+
+            if (labelName.length > 20) {
+                labelName = labelName.substring(0, 17) + '...';
+            }
+
+            return { label: '🚚 ' + labelName.toUpperCase(), isExpress: isExpress, isPickup: false };
+        }
+
+        // --- LÓGICA DE PRAZOS E SLA OPERACIONAL ---
+        function getStoreOpeningTime(date) {
+            const day = date.getDay();
+            const isSunday = (day === 0);
+            const openHour = isSunday ? 12 : 10;
+            const closeHour = isSunday ? 21 : 22;
+            return { openHour, closeHour, isSunday };
+        }
+
+        function getAdjustedStartTime(createdAt) {
+            if (!createdAt) return new Date();
+            let date = new Date(createdAt);
+            if (isNaN(date.getTime())) date = new Date();
+
+            const config = getStoreOpeningTime(date);
+            const currentHour = date.getHours();
+
+            if (currentHour < config.openHour) {
+                date.setHours(config.openHour, 0, 0, 0);
+            }
+            else if (currentHour >= config.closeHour) {
+                date.setDate(date.getDate() + 1);
+                const nextConfig = getStoreOpeningTime(date);
+                date.setHours(nextConfig.openHour, 0, 0, 0);
+            }
+            return date;
+        }
+
+        function getSLAInfo(createdAt, isExpress) {
+            const now = new Date();
+            const startTime = getAdjustedStartTime(createdAt);
+
+            if (now < startTime) {
+                return { minutes: 999, text: "🕒 AGUARDA ABERTURA", cardClass: "tv-card-green", urgency: 1, textClass: "time-green" };
+            }
+
+            const limit = new Date(startTime.getTime() + (TEMPO_LIMITE_MINUTOS * 60 * 1000));
+            const diff = limit - now;
+            const absDiff = Math.abs(diff);
+            const mins = Math.floor(absDiff / 60000);
+            const secs = Math.floor((absDiff % 60000) / 1000);
+            const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+
+            if (diff < 0) return { minutes: -mins, text: `🚨 ESTOURADO! -${timeStr}`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red" };
+            if (isExpress || mins < 15) return { minutes: mins, text: `🔥 CRÍTICO: ${timeStr}`, cardClass: "tv-card-red", urgency: 3, textClass: "time-red" };
+            if (mins < 40) return { minutes: mins, text: `⏳ ATENÇÃO: ${timeStr}`, cardClass: "tv-card-orange", urgency: 2, textClass: "time-orange" };
+
+            return { minutes: mins, text: `✅ SEGURO: ${timeStr}`, cardClass: "tv-card-green", urgency: 1, textClass: "time-green" };
+        }
+
+        // --- IDENTIFICAÇÃO DE GARGALOS E ATRASOS GLOBAIS ---
+        function getBottleneckInfo(o) {
+            if (!o) return null;
+            const now = new Date();
+            const updated = new Date(o.updatedAt || o.createdAt || now);
+            const diffMins = (now - updated) / 60000;
+
+            const isRetirada = o.isPickup;
+
+            if (o.statusNativo === 'INVOICING' && diffMins > 10) {
+                return { label: '🧾 FATURAMENTO TRAVADO (>10 MIN)', isCritical: true, color: 'var(--neon-red)', stage: 'FATURANDO' };
+            }
+            if (o.statusNativo === 'INVOICING_FAIL') {
+                return { label: '❌ ERRO FISCAL: FALHA AO EMITIR NOTA', isCritical: true, color: 'var(--neon-red)', stage: 'FATURANDO' };
+            }
+            if (o.statusNativo === 'PICKING' && diffMins > 30) {
+                return { label: '⏳ SEPARAÇÃO LENTA NO ESTOQUE (>30 MIN)', isCritical: true, color: 'var(--neon-orange)', stage: 'SEPARANDO' };
+            }
+            if (o.statusNativo === 'CHECKED' && diffMins > 15) {
+                return { label: '📢 CONFERIDO: FALTA FATURAR NO OMS (>15 MIN)', isCritical: true, color: 'var(--neon-orange)', stage: 'CONFERIDOS' };
+            }
+            if (o.statusNativo === 'SEND_READY') {
+                if (!isRetirada && diffMins > 60) {
+                    return { label: '🚨 CRIAR LISTA DE DESPACHO (>60 MIN)', isCritical: true, color: 'var(--neon-red)', stage: 'DESPACHOS' };
+                }
+                if (isRetirada && diffMins > 60) {
+                    return { label: '⏳ PRONTO PARA RETIRADA (>60 MIN)', isCritical: false, color: 'var(--neon-yellow)', stage: 'RETIRADAS' };
+                }
+            }
+            return null;
+        }
+
+        // --- RENDERIZAÇÃO DO LAYOUT EM TELA CHEIA (MODO TV) ---
+        function renderTvView(list) {
+            if (currentViewMode === 'NATIVE') {
+                const modalEl = document.getElementById('oms-persistent-new-order-modal');
+                if (modalEl) modalEl.style.display = 'none';
+                return;
+            }
+
+            // Gravar posições de rolagem antes de qualquer atualização do DOM
+            const retiradasListEl = document.getElementById('tv-list-retiradas');
+            const entregasListEl = document.getElementById('tv-list-entregas');
+            const scrollRetiradas = retiradasListEl ? retiradasListEl.scrollTop : 0;
+            const scrollEntregas = entregasListEl ? entregasListEl.scrollTop : 0;
+
+            // Filtrar pendências reais (pedidos ativos nas etapas iniciais)
+            const pedidosPendentes = list.filter(o => ['WAITING', 'PICKING', 'INVOICING', 'CHECKED'].includes(o.statusNativo));
+
+            // Filtrar gargalos operacionais (de outras etapas que falharam ou excederam tempo)
+            const gargalos = list.filter(o => { const b = getBottleneckInfo(o); return !['WAITING', 'PICKING', 'INVOICING', 'CHECKED'].includes(o.statusNativo) && b && b.isCritical; });
+
+            let visibleOrders = [...pedidosPendentes, ...gargalos];
+
+            // Separar por canal (Retirada vs Entrega)
+            const retiradas = visibleOrders.filter(o => o.isPickup);
+            const entregas = visibleOrders.filter(o => !o.isPickup);
+
+            // --- INJETAR CARDS MOCK DO IFOOD NAS ENTREGAS ---
+            const ifoodPendingCards = parseInt(GM_getValue('ifoodPendingOrders', 0), 10);
+            const ifoodUpdateCards = parseInt(GM_getValue('ifoodLastUpdate', 0), 10);
+            const isIfoodAliveCards = (Date.now() - ifoodUpdateCards) < 60000;
+
+            let ifoodOrderDetails = null;
+            try {
+                const detailsStr = GM_getValue('ifoodOrderDetails', null);
+                if (detailsStr) ifoodOrderDetails = JSON.parse(detailsStr);
+            } catch (e) { }
+
+            if (isIfoodAliveCards && ifoodPendingCards > 0) {
+                if (ifoodOrderDetails) {
+                    entregas.unshift(ifoodOrderDetails);
+                } else {
+                    for (let i = 0; i < ifoodPendingCards; i++) {
+                        entregas.unshift({
+                            id: `NOVO-IFOOD-${i + 1}`,
+                            statusNativo: 'WAITING',
+                            createdAt: new Date().toISOString(),
+                            isExpress: true,
+                            carrier: 'NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO',
+                            deliveryType: 'EXPRESS',
+                            customerName: 'Acesse o App Separador',
+                            items: []
+                        });
+                    }
+                }
+            }
+
+            // --- INJETAR CARDS MOCK DO RAPPI NAS ENTREGAS ---
+            const rappiPendingCards = parseInt(GM_getValue('rappiPendingOrders', 0), 10);
+            const rappiUpdateCards = parseInt(GM_getValue('rappiLastUpdate', 0), 10);
+            const isRappiAliveCards = (Date.now() - rappiUpdateCards) < 60000;
+
+            if (isRappiAliveCards && rappiPendingCards > 0) {
+                for (let i = 0; i < rappiPendingCards; i++) {
+                    entregas.unshift({
+                        id: `NOVO-RAPPI-${i + 1}`,
+                        statusNativo: 'WAITING',
+                        createdAt: new Date().toISOString(),
+                        isExpress: true,
+                        carrier: 'ACEITAR NO GESTOR RAPPI',
+                        deliveryType: 'EXPRESS',
+                        customerName: 'Pedido Rappi Pendente',
+                        items: []
+                    });
+                }
+            }
+
+            // Agrupamento para pipeline horizontal superior e monitor de Apoio
+            const counts = { WAITING: 0, PICKING: 0, INVOICING: 0, CHECKED: 0, SEND_READY: 0, PICKUP_READY: 0 };
+            list.forEach(o => {
+                if (o.statusNativo === 'INVOICING_FAIL') counts.INVOICING++;
+                else if (o.statusNativo === 'PICKUP_READY' || o.statusNativo === 'PICKUP_PAID') counts.PICKUP_READY++;
+                else if (counts[o.statusNativo] !== undefined) counts[o.statusNativo]++;
+            });
+
+
+
+            // 1. Atualizar relógio local
+            const clockTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const clockDate = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).toUpperCase();
+
+            // 2. Determinar status de saúde geral
+            const temPendentes = pedidosPendentes.length > 0;
+            const temGargalosGraves = gargalos.length > 0;
+
+            let statusBadgeHtml = '';
+            if (temPendentes || temGargalosGraves) {
+                statusBadgeHtml = `<div style="background:var(--neon-red); color:#000; font-size:16px; font-weight:900; padding:8px 18px; border-radius:30px; letter-spacing:1px; animation: heartbeat 1s infinite;">🚨 AÇÃO IMEDIATA REQUERIDA</div>`;
+            } else {
+                statusBadgeHtml = `<div style="background:var(--neon-green); color:#000; font-size:16px; font-weight:900; padding:8px 18px; border-radius:30px; letter-spacing:1px;">✅ TUDO EM DIA</div>`;
+            }
+
+            // --- LEITURA DO GESTOR IFOOD VIA TAMPERMONKEY STORAGE ---
+            let ifoodAlertHtml = '';
+            const ifoodPending = parseInt(GM_getValue('ifoodPendingOrders', 0), 10);
+            const ifoodUpdate = parseInt(GM_getValue('ifoodLastUpdate', 0), 10);
+            const isIfoodAlive = (Date.now() - ifoodUpdate) < 60000; // atualizado no ultimo minuto
+
+            if (isIfoodAlive && ifoodPending > 0) {
+                ifoodAlertHtml = `
+                <div style="background: linear-gradient(135deg, rgba(234, 29, 44, 0.2), rgba(234, 29, 44, 0.05)); border: 3px solid #ea1d2c; border-radius: 16px; padding: 15px 30px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; animation: pulseRedGlow 1.5s infinite ease-in-out; flex-shrink: 0;">
+                    <div style="display:flex; align-items:center; gap: 20px;">
+                        <span style="font-size: 50px; animation: heartbeat 1s infinite;">🛵</span>
+                        <div>
+                            <div style="font-size: 26px; font-weight: 900; color: #ea1d2c; text-transform: uppercase; letter-spacing: 1px;">NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO</div>
+                            <div style="font-size: 16px; font-weight: 700; color: rgba(255,255,255,0.8);">Abra o App Separador do iFood para visualizar e separar o pedido.</div>
+                        </div>
+                    </div>
+                    <div style="font-size: 60px; font-weight: 900; color: #ea1d2c; font-family: 'Lilita One', cursive; line-height: 1; text-shadow: 0 0 20px rgba(234, 29, 44, 0.5);">${ifoodPending}</div>
+                </div>`;
+
+                // Dispara sirene se iFood tem pedido
+                const now = Date.now();
+                if (now - lastAlarmPlayedTime > ALARM_COOLDOWN) {
+                    playSiren();
+                    lastAlarmPlayedTime = now;
+                }
+            }
+
+            // --- LEITURA DO GESTOR RAPPI VIA TAMPERMONKEY STORAGE ---
+            let rappiAlertHtml = '';
+            const rappiPending = parseInt(GM_getValue('rappiPendingOrders', 0), 10);
+            const rappiUpdate = parseInt(GM_getValue('rappiLastUpdate', 0), 10);
+            const isRappiAlive = (Date.now() - rappiUpdate) < 60000;
+
+            if (isRappiAlive && rappiPending > 0) {
+                rappiAlertHtml = `
+                <div style="background: linear-gradient(135deg, rgba(255, 69, 0, 0.2), rgba(255, 69, 0, 0.05)); border: 3px solid #ff4500; border-radius: 16px; padding: 15px 30px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; animation: pulseRedGlow 1.5s infinite ease-in-out; flex-shrink: 0;">
+                    <div style="display:flex; align-items:center; gap: 20px;">
+                        <span style="font-size: 50px; animation: heartbeat 1s infinite;">🛵</span>
+                        <div>
+                            <div style="font-size: 26px; font-weight: 900; color: #ff4500; text-transform: uppercase; letter-spacing: 1px;">GESTOR RAPPI: ATENÇÃO!</div>
+                            <div style="font-size: 16px; font-weight: 700; color: rgba(255,255,255,0.8);">Há ${rappiPending} pedido(s) esperando aceite no portal do Rappi que não integraram no OMS.</div>
+                        </div>
+                    </div>
+                    <div style="font-size: 60px; font-weight: 900; color: #ff4500; font-family: 'Lilita One', cursive; line-height: 1; text-shadow: 0 0 20px rgba(255, 69, 0, 0.5);">${rappiPending}</div>
+                </div>`;
+
+                const now = Date.now();
+                if (now - lastAlarmPlayedTime > ALARM_COOLDOWN) {
+                    playSiren();
+                    lastAlarmPlayedTime = now;
+                }
+            }
+
+            // Criar estrutura base do Dashboard se vazio (Considerando integrações externas e despachos)
+            const isListEmpty = (pedidosPendentes.length === 0 && gargalos.length === 0 && counts.SEND_READY === 0 && !(isIfoodAlive && ifoodPending > 0) && !(isRappiAlive && rappiPending > 0));
+
+            // 3. Checar Destaques dos primeiros 30 segundos (Alta Prioridade)
+            let discoveryTimes = {};
+            try {
+                discoveryTimes = JSON.parse(sessionStorage.getItem('oms_order_discovery_times') || '{}');
+            } catch (e) {
+                discoveryTimes = {};
+            }
+
+            const newOrdersInHighlight = list.filter(o =>
+                o.statusNativo === 'WAITING' &&
+                discoveryTimes[o.id] &&
+                (Date.now() - discoveryTimes[o.id]) < ((o.id.includes('IFOOD') || o.id.includes('RAPPI')) ? 10000 : 30000)
+            );
+
+            let activeHighlightOrder = null;
+            let elapsedMs = 0;
+            let remainingMs = 0;
+            let percent = 0;
+            let isRotation = false;
+
+            // 4. Checar Alertas Críticos (Prioridade Máxima Absoluta - TRAVA A TELA)
+            const criticalAlerts = [];
+            // iFood e Rappi removidos daqui para não travarem a tela (pedidos OMS não prejudicados)
+            if (counts.SEND_READY > 0) criticalAlerts.push({ type: 'DISPATCH', count: counts.SEND_READY, id: 'VIRTUAL-DISPATCH', title: 'LISTA DE DESPACHO', color: 'var(--neon-yellow)' });
+
+            if (criticalAlerts.length > 0) {
+                // Rotaciona entre os alertas críticos se houver mais de um (a cada 5 segundos)
+                const alertIndex = Math.floor(Date.now() / 5000) % criticalAlerts.length;
+                activeHighlightOrder = {
+                    isVirtualAlert: true,
+                    ...criticalAlerts[alertIndex]
+                };
+                isRotation = false; // Trava a tela
+                elapsedMs = 0;
+                remainingMs = 0;
+                percent = 100;
+            } else if (newOrdersInHighlight.length > 0) {
+                // Focar no novo pedido mais recentemente descoberto
+                newOrdersInHighlight.sort((a, b) => (discoveryTimes[b.id] || 0) - (discoveryTimes[a.id] || 0));
+                activeHighlightOrder = newOrdersInHighlight[0];
+                elapsedMs = Date.now() - discoveryTimes[activeHighlightOrder.id];
+                remainingMs = Math.max(0, 30000 - elapsedMs);
+                percent = (remainingMs / 30000) * 100;
+                isRotation = false;
+            } else {
+                // Sem novos pedidos nos últimos 30s: Rotacionar entre todas as pendências da lista
+                const rotationCandidates = [...pedidosPendentes, ...gargalos];
+                if (rotationCandidates.length > 0) {
+                    const nowMs = Date.now();
+                    if (lastRotationTime === 0) {
+                        lastRotationTime = nowMs;
+                    }
+
+                    let cycleMs = nowMs - lastRotationTime;
+
+                    // Ciclo total de 60 segundos (30s mostrando + 30s oculto)
+                    if (cycleMs >= 60000) {
+                        activeRotationalIndex = (activeRotationalIndex + 1) % rotationCandidates.length;
+                        lastRotationTime = nowMs;
+                        cycleMs = 0;
+                    }
+
+                    // Garantir limites caso o tamanho da lista tenha encolhido
+                    if (activeRotationalIndex >= rotationCandidates.length) {
+                        activeRotationalIndex = 0;
+                        lastRotationTime = nowMs;
+                        cycleMs = 0;
+                    }
+
+                    const isShowPhase = cycleMs < 30000;
+
+                    if (isShowPhase) {
+                        activeHighlightOrder = rotationCandidates[activeRotationalIndex];
+                        elapsedMs = cycleMs;
+                        remainingMs = Math.max(0, 30000 - elapsedMs);
+                        percent = (remainingMs / 30000) * 100;
+                        isRotation = true;
+                    } else {
+                        activeHighlightOrder = null;
+                        isRotation = false;
+                    }
+                } else {
+                    activeHighlightOrder = null;
+                    activeRotationalIndex = 0;
+                    lastRotationTime = 0;
+                }
+            }
+
+            // 4. Gerenciamento do Modal de Destaque Persistente e Sem Piscadas (Flicker-Free)
+            let modalEl = document.getElementById('oms-persistent-new-order-modal');
+            if (!modalEl) {
+                modalEl = document.createElement('div');
+                modalEl.id = 'oms-persistent-new-order-modal';
+                modalEl.className = 'new-order-modal';
+                modalEl.style.display = 'none';
+                document.body.appendChild(modalEl);
+            }
+
+            if (activeHighlightOrder) {
+                if (activeHighlightOrder.isVirtualAlert) {
+                    // --- RENDERIZA O MODAL DE ALERTA CRÍTICO (TELA TRAVADA) ---
+                    const currentShowingId = modalEl.getAttribute('data-showing-id');
+                    if (currentShowingId !== activeHighlightOrder.id) {
+                        const now = Date.now();
+                        if (now - lastAlarmPlayedTime > ALARM_COOLDOWN) {
+                            playSiren();
+                            lastAlarmPlayedTime = now;
+                        }
+                    }
+                    modalEl.setAttribute('data-showing-id', activeHighlightOrder.id);
+                    modalEl.setAttribute('data-is-rotation', 'false');
+                    modalEl.className = 'new-order-modal'; // reset de animação
+                    modalEl.style.borderColor = activeHighlightOrder.color;
+                    modalEl.style.boxShadow = `0 20px 60px ${activeHighlightOrder.color}80`;
+
+                    const aType = activeHighlightOrder.type;
+                    let msg = '';
+                    if (aType === 'DISPATCH') msg = 'Acesse o OMS &rarr; Lista de Despacho e realize a expedição dos pedidos conferidos antes de iniciar novas separações.';
+                    else msg = `Há ${activeHighlightOrder.count} pedido(s) esperando aceite no portal que não integraram no OMS. Aceite-os manualmente.`;
+
+                    modalEl.innerHTML = `
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; width: 100%; background: radial-gradient(circle, rgba(20,10,10,0.95) 0%, rgba(10,0,0,0.95) 100%); border-radius: 12px; border: 5px solid ${activeHighlightOrder.color}; animation: pulseRedGlow 1.5s infinite; text-align: center; padding: 40px; box-sizing: border-box;">
+                        <div style="font-size: 120px; animation: heartbeat 1s infinite; margin-bottom: 20px;">🚨</div>
+                        <div style="font-size: 80px; font-weight: 900; color: ${activeHighlightOrder.color}; text-transform: uppercase; line-height: 1; margin-bottom: 30px; text-shadow: 0 0 30px ${activeHighlightOrder.color};">
+                            ${activeHighlightOrder.title} PENDENTE!
+                        </div>
+                        <div style="font-size: 32px; color: #fff; font-weight: 700; max-width: 80%; line-height: 1.4; margin-bottom: 50px;">
+                            ${msg}
+                        </div>
+                        <div style="background: ${activeHighlightOrder.color}20; border: 3px solid ${activeHighlightOrder.color}; padding: 20px 60px; border-radius: 20px;">
+                            <div style="font-size: 24px; color: rgba(255,255,255,0.7); text-transform: uppercase; font-weight: 900; margin-bottom: 10px;">QUANTIDADE PENDENTE</div>
+                            <div style="font-size: 100px; color: #fff; font-weight: 900; line-height: 1; text-shadow: 0 0 20px ${activeHighlightOrder.color};">${activeHighlightOrder.count}</div>
+                        </div>
+                    </div>
+                    `;
+                    modalEl.style.display = 'block';
+
+                } else {
+                    // --- RENDERIZA O CARROSSEL DE SEPARAÇÃO (PEDIDOS) ---
+                    const deliveryInfo = parseDeliveryInfo(activeHighlightOrder);
+
+                    // 3. Determinar o tema de cor de acordo com o canal de venda
+                    const labelStr = String(deliveryInfo.label).toUpperCase();
+                    const isIfood = labelStr.includes('IFOOD');
+                    const isRappi = labelStr.includes('RAPPI');
+
+                    let themeColor = 'var(--neon-blue)'; // Azul neon padrão para revezamentos
+                    let themeGlow = 'rgba(0, 210, 255, 0.4)';
+
+                    if (!isRotation) {
+                        themeColor = 'var(--neon-green)';
+                        themeGlow = 'rgba(0, 255, 136, 0.4)';
+                    }
+
+                    // Substituições de cores de marca (iFood/Rappi)
+                    if (isIfood) {
+                        themeColor = '#FF002E'; // Vermelho iFood Neon
+                        themeGlow = 'rgba(255, 0, 46, 0.45)';
+                    } else if (isRappi) {
+                        themeColor = '#FF4500'; // Laranja Rappi Neon
+                        themeGlow = 'rgba(255, 69, 0, 0.45)';
+                    }
+
+                    // Aplicar estilos dinâmicos de borda e sombra no modal
+                    modalEl.style.borderColor = themeColor;
+                    modalEl.style.boxShadow = `0 20px 60px ${themeGlow}`;
+
+                    // 4. Determinar se o SLA geral do pedido está estourado (meta real)
+                    const orderSla = getSLAInfo(activeHighlightOrder.createdAt, activeHighlightOrder.isExpress);
+                    const isSlaExpired = orderSla.urgency === 3 && orderSla.text.includes('ESTOURADO');
+
+                    let marqueeContent = '';
+                    if (isSlaExpired) {
+                        marqueeContent = '🚨 PRAZO DE SLA EXCEDIDO! REALIZAR A SEPARAÇÃO DE IMEDIATO! 🚨 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; '.repeat(3);
+                    } else if (!isRotation) {
+                        marqueeContent = '🚨 NOVO PEDIDO PENDENTE DE SEPARAÇÃO IMEDIATA! 🚨 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; '.repeat(3);
+                    } else {
+                        marqueeContent = '⚠️ ATENÇÃO: PEDIDO PENDENTE DE SEPARAÇÃO OPERACIONAL! ⚠️ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; '.repeat(3);
+                    }
+
+                    // Se mudou o pedido ativo ou o modal estava escondido, ou se for hora de rotacionar os itens
+                    const currentShowingId = modalEl.getAttribute('data-showing-id');
+                    const currentHighlightType = modalEl.getAttribute('data-is-rotation');
+                    const hasTypeChanged = currentHighlightType !== String(isRotation);
+
+                    const apiItemsList = Array.isArray(activeHighlightOrder.items) ? activeHighlightOrder.items : [];
+
+                    // Rotação dos itens do pedido a cada 5 segundos
+                    const nowSecs = Math.floor(Date.now() / 1000);
+                    let itemRotationTriggered = false;
+                    if (apiItemsList.length > 1) {
+                        if (nowSecs - lastOrderItemRotationTime >= 5) {
+                            activeOrderItemIndex = (activeOrderItemIndex + 1) % apiItemsList.length;
+                            lastOrderItemRotationTime = nowSecs;
+                            itemRotationTriggered = true;
+                        }
+                    } else {
+                        activeOrderItemIndex = 0;
+                    }
+
+                    // Zera o índice ao mudar de pedido
+                    if (currentShowingId !== activeHighlightOrder.id) {
+                        activeOrderItemIndex = 0;
+                        lastOrderItemRotationTime = nowSecs;
+                    }
+
+                    if (currentShowingId !== activeHighlightOrder.id || modalEl.style.display === 'none' || hasTypeChanged || itemRotationTriggered) {
+                        if (currentShowingId !== activeHighlightOrder.id || modalEl.style.display === 'none') {
+                            playNotificationChime(); // Toca apenas quando abre um pedido novo
+                        }
+
+                        modalEl.setAttribute('data-showing-id', activeHighlightOrder.id);
+                        modalEl.setAttribute('data-is-rotation', String(isRotation));
+
+                        if (isRotation) {
+                            modalEl.classList.add('rotate-mode');
+                        } else {
+                            modalEl.classList.remove('rotate-mode');
+                        }
+
+                        const item = apiItemsList[activeOrderItemIndex] || {};
+                        const isMultiple = Number(item.quantity) > 1;
+                        const qtyBadgeStyle = isMultiple
+                            ? `background: rgba(255, 69, 0, 0.2); border: 3px solid #FF4500; color: #FF4500; box-shadow: 0 0 20px rgba(255, 69, 0, 0.6);`
+                            : `background: rgba(0, 255, 136, 0.1); border: 2px solid rgba(0, 255, 136, 0.3); color: var(--neon-green);`;
+                        const qtyText = isMultiple ? `⚠️ QTD: ${item.quantity}` : `QTD: ${item.quantity || 1}`;
+                        const imgUrl = item.imageUrl || '';
+
+                        const modalTitle = isRotation ? '⚠️ PEDIDO PENDENTE' : '🚨 NOVO PEDIDO';
+                        const subSlaTitle = isRotation ? 'TELA OPERACIONAL CONGELA EM' : 'SLA DE SEPARAÇÃO IMEDIATO';
+                        const countdownLabel = isRotation ? 'OCULTA EM' : 'FALTA EM';
+
+                        const isAtrasado = orderSla.text.includes('ESTOURADO');
+                        const statusText = isAtrasado ? 'ATRASADO' : 'NOVO';
+                        let rawCarrier = String(activeHighlightOrder.carrier || activeHighlightOrder.deliveryType || (deliveryInfo.isPickup ? 'RETIRADA' : 'ENTREGA')).toUpperCase();
+                        if (rawCarrier.length > 20) rawCarrier = rawCarrier.substring(0, 17) + '...';
+                        const tipoText = rawCarrier;
+                        const tipoColor = deliveryInfo.isPickup ? 'var(--neon-yellow)' : 'var(--neon-blue)';
+                        const statusColor = isAtrasado ? 'var(--neon-red)' : 'var(--neon-green)';
+
+                        modalEl.innerHTML = `
+                    <div style="display: flex; height: 100%; width: 100%; background: radial-gradient(circle, rgba(11,11,15,0.95) 0%, rgba(20,20,30,0.95) 100%); overflow: hidden; font-family: 'Lilita One', cursive; border-radius: 12px; box-sizing: border-box;">
+                        <!-- Lado Esquerdo: Produto -->
+                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; position: relative;">
+                            <div style="position: absolute; top: 30px; left: 40px; font-size: 50px; color: rgba(255,255,255,0.1); white-space: nowrap; font-weight: 900; text-transform: uppercase;">
+                                ITEM ${activeOrderItemIndex + 1} DE ${apiItemsList.length}
+                            </div>
+
+                            <!-- Imagem -->
+                            <div style="height: 40vh; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; width: 100%;">
+                                ${imgUrl
+                                ? `<img src="${imgUrl}" style="max-height: 100%; max-width: 100%; object-fit: contain; filter: drop-shadow(0 20px 30px rgba(0,0,0,0.5)); border-radius: 20px; z-index: 2;">`
+                                : `<div style="font-size: 100px; filter: grayscale(1);">🧸</div>`
+                            }
+                            </div>
+
+                            <div style="font-size: 40px; color: #fff; text-align: center; max-width: 90%; line-height: 1.1; margin-bottom: 30px; z-index: 2; text-shadow: 0 4px 10px rgba(0,0,0,0.5); font-family: sans-serif; font-weight: bold;">
+                                ${item.name || 'Produto sem nome'}
+                            </div>
+
+                            <div style="display: flex; gap: 20px; justify-content: center; width: 100%; z-index: 2;">
+                                <div style="background: rgba(100, 180, 255, 0.1); padding: 15px 30px; border-radius: 15px; font-family: monospace; font-size: 36px; font-weight: 900; color: #aae9ff; border: 2px solid rgba(100, 180, 255, 0.3); letter-spacing: 2px; text-shadow: 0 0 10px rgba(100,180,255,0.3);">
+                                    SAP: ${item.sku || '---'}
+                                </div>
+                                <div style="background: rgba(255, 220, 100, 0.1); padding: 15px 30px; border-radius: 15px; font-family: monospace; font-size: 36px; font-weight: 900; color: #ffe6aa; border: 2px solid rgba(255, 220, 100, 0.3); letter-spacing: 2px; text-shadow: 0 0 10px rgba(255,220,100,0.3);">
+                                    EAN: ${item.ean || '---'}
+                                </div>
+                                <div style="${qtyBadgeStyle} padding: 15px 30px; border-radius: 15px; font-size: 36px; font-weight: 900; letter-spacing: 2px;">
+                                    ${qtyText}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Lado Direito: Resumo do Pedido -->
+                        <div style="width: 350px; background: rgba(0,0,0,0.4); border-left: 2px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 40px 20px; box-sizing: border-box;">
+
+                            <div style="text-align: center; width: 100%;">
+                                <div style="font-size: 20px; font-weight: 900; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">${modalTitle}</div>
+                                <div style="font-size: 36px; font-weight: 900; color: ${tipoColor}; text-shadow: 0 0 20px ${tipoColor}40; line-height: 1.1; margin-bottom: 20px; word-break: break-word;">${tipoText}</div>
+
+                                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 30px; width: 100%; box-sizing: border-box;">
+                                    <div style="font-size: 16px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Pedido OMS</div>
+                                    <div style="font-size: 32px; color: #fff; font-weight: 900; word-break: break-all; line-height: 1.1;">#${activeHighlightOrder.id}</div>
+                                </div>
+                            </div>
+
+                            <div style="text-align: center; width: 100%;">
+                                <div style="font-size: 18px; font-weight: 900; color: ${statusColor}; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; background: ${statusColor}20; padding: 10px; border-radius: 10px; border: 1px solid ${statusColor}40;">
+                                    STATUS: ${statusText}
+                                </div>
+
+                                <!-- Cronômetro SLA Original -->
+                                <div style="margin-bottom: 30px;">
+                                    <div style="font-size: 14px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">SLA do Pedido</div>
+                                    <div id="modal-sla-time" style="font-size: 50px; font-weight: 900; color: ${isAtrasado ? 'var(--neon-red)' : '#fff'}; text-shadow: 0 0 20px ${isAtrasado ? 'rgba(255,0,0,0.5)' : 'rgba(255,255,255,0.2)'}; line-height: 1;">
+                                        ${orderSla.text.split(' ').pop()}
+                                    </div>
+                                </div>
+
+                                <!-- Barra de Progresso de Alerta -->
+                                <div style="background: rgba(255,255,255,0.03); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.05); width: 100%; box-sizing: border-box;">
+                                    <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 800; color: rgba(255,255,255,0.4); margin-bottom: 10px;">
+                                        <span>${subSlaTitle}</span>
+                                    </div>
+                                    <div style="font-size: 30px; font-weight: 900; color: #fff; margin-bottom: 15px;" id="oms-new-order-countdown-text">
+                                        ${countdownLabel} ${Math.ceil(remainingMs / 1000)}s
+                                    </div>
+                                    <div style="background: rgba(255,255,255,0.1); border-radius: 8px; height: 10px; overflow: hidden; width: 100%;">
+                                        <div id="oms-new-order-progress-bar" style="background: ${themeColor}; height: 100%; width: ${percent}%; box-shadow: 0 0 15px ${themeColor}; transition: width 0.2s linear;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                        modalEl.style.display = 'block';
+                    } else {
+                        // Se é o mesmo pedido, ATUALIZAR APENAS a timeline, o countdown do modal (Flicker-Free!)
+                        const countdownTextEl = document.getElementById('oms-new-order-countdown-text');
+                        const progressBarEl = document.getElementById('oms-new-order-progress-bar');
+                        const countdownLabel = isRotation ? 'OCULTA EM' : 'FALTA EM';
+
+                        if (countdownTextEl) {
+                            countdownTextEl.innerText = `${countdownLabel} ${Math.ceil(remainingMs / 1000)}s`;
+                        }
+                        if (progressBarEl) {
+                            progressBarEl.style.width = `${percent}%`;
+                            progressBarEl.style.background = themeColor;
+                            progressBarEl.style.boxShadow = `0 0 10px ${themeColor}`;
+                        }
+
+                        const modalSlaTimeEl = document.getElementById('modal-sla-time');
+                        if (modalSlaTimeEl) {
+                            const isAtrasado = orderSla.text.includes('ESTOURADO');
+                            modalSlaTimeEl.innerText = orderSla.text.split(' ').pop();
+                            modalSlaTimeEl.style.color = isAtrasado ? 'var(--neon-red)' : '#fff';
+                        }
+
+                        // Ticking do cronômetro de picking recomendado em tempo real
+                        const timerWrapperEl = document.getElementById('oms-picking-timer-wrapper');
+                        const timerValueEl = document.getElementById('oms-picking-timer-value');
+
+                        if (timerValueEl) {
+                            timerValueEl.innerText = pickingTimerExpired ? '🚨 LIMITE EXCEDIDO' : pickingTimerStr;
+                        }
+                        if (timerWrapperEl) {
+                            timerWrapperEl.style.borderColor = pickingTimerColor;
+                            timerWrapperEl.style.animation = pickingTimerPulse;
+                        }
+                    } // FIM DO UPDATE TIMER
+                } // FIM DO ELSE (CARROSSEL)
+            } else {
+                modalEl.style.display = 'none';
+                modalEl.removeAttribute('data-showing-id');
+                modalEl.removeAttribute('data-is-rotation');
+            }
+
+            let emptyStateHtml = '';
+            if (isListEmpty) {
+                const ifoodAguardando = parseInt(GM_getValue('ifoodAguardandoColeta', 0), 10);
+                const rappiAguardando = parseInt(GM_getValue('rappiAguardandoColeta', 0), 10);
+                emptyStateHtml = `
+                    <div style="display: flex; height: 100vh; background: radial-gradient(circle, rgba(11,11,15,1) 0%, rgba(20,20,30,1) 100%); width: 100vw; overflow: hidden; font-family: 'Lilita One', cursive; align-items: center; justify-content: center;">
+
+                        <!-- Lado Esquerdo: Relógio Gigante e Status -->
+                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; border-right: 2px solid rgba(255,255,255,0.05);">
+                            <div style="font-size: 200px; font-weight: 900; color: #fff; line-height: 1; text-shadow: 0 0 40px rgba(255,255,255,0.2);">${clockTime}</div>
+                            <div style="font-size: 50px; color: rgba(255,255,255,0.5); font-weight: 700; margin-top: 10px; text-transform: uppercase;">${clockDate}</div>
+                            <div style="margin-top: 60px; padding: 20px 40px; background: rgba(0, 255, 136, 0.1); border: 2px solid var(--neon-green); border-radius: 30px; color: var(--neon-green); font-size: 28px; font-weight: 900; letter-spacing: 2px; animation: heartbeat 2s infinite;">
+                                ✅ NENHUMA PENDÊNCIA NO MOMENTO
+                            </div>
+                        </div>
+
+                        <!-- Lado Direito: Monitor de Coleta -->
+                        <div style="width: 500px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; margin-right: 80px;">
+
+                            <div style="text-align: center; background: rgba(0, 0, 0, 0.4); border: 2px solid rgba(255, 255, 255, 0.1); padding: 30px; border-radius: 24px; width: 100%; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                                <div style="font-size: 28px; color: #fff; font-weight: 900; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 30px;">
+                                    🛵 Aguardando Coleta
+                                </div>
+
+                                <div style="display: flex; flex-direction: column; gap: 20px;">
+                                    <!-- iFood -->
+                                    <div style="background: ${ifoodAguardando > 0 ? 'rgba(234, 29, 44, 0.15)' : 'rgba(255, 255, 255, 0.05)'}; border: 2px solid ${ifoodAguardando > 0 ? '#ea1d2c' : 'rgba(255,255,255,0.1)'}; padding: 20px; border-radius: 16px; display: flex; justify-content: space-between; align-items: center; ${ifoodAguardando > 0 ? 'animation: pulseRedGlow 2s infinite;' : ''}">
+                                        <div style="display: flex; align-items: center; gap: 15px;">
+                                            <span style="font-size: 40px;">🔴</span>
+                                            <span style="font-size: 28px; font-weight: bold; color: ${ifoodAguardando > 0 ? '#ea1d2c' : 'rgba(255,255,255,0.5)'};">iFood</span>
+                                        </div>
+                                        <span style="font-size: 50px; font-weight: 900; color: ${ifoodAguardando > 0 ? '#ea1d2c' : 'rgba(255,255,255,0.3)'}; font-family: 'Lilita One', cursive; line-height: 1;">${ifoodAguardando}</span>
+                                    </div>
+
+                                    <!-- Rappi -->
+                                    <div style="background: ${rappiAguardando > 0 ? 'rgba(255, 69, 0, 0.15)' : 'rgba(255, 255, 255, 0.05)'}; border: 2px solid ${rappiAguardando > 0 ? '#ff4500' : 'rgba(255,255,255,0.1)'}; padding: 20px; border-radius: 16px; display: flex; justify-content: space-between; align-items: center; ${rappiAguardando > 0 ? 'animation: pulseYellowGlow 2s infinite;' : ''}">
+                                        <div style="display: flex; align-items: center; gap: 15px;">
+                                            <span style="font-size: 40px;">🟠</span>
+                                            <span style="font-size: 28px; font-weight: bold; color: ${rappiAguardando > 0 ? '#ff4500' : 'rgba(255,255,255,0.5)'};">Rappi</span>
+                                        </div>
+                                        <span style="font-size: 50px; font-weight: 900; color: ${rappiAguardando > 0 ? '#ff4500' : 'rgba(255,255,255,0.3)'}; font-family: 'Lilita One', cursive; line-height: 1;">${rappiAguardando}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                `;
+            }
+
+            tvDashboard.innerHTML = `
+            ${isListEmpty ? emptyStateHtml : `
+                <div style="padding: 20px; flex-shrink: 0; padding-bottom: 0;">
+                    ${ifoodAlertHtml}
+                    ${rappiAlertHtml}
+                </div>
+
+                <!-- Top Header Consolidado -->
+                <div class="tv-header" style="justify-content: center; padding: 20px 40px; border-bottom: 2px solid rgba(255,255,255,0.05); background: rgba(0,0,0,0.5); display: flex; gap: 40px; align-items: center;">
+                    <!-- Card de Fluxo Operacional Consolidado -->
+                    <div style="display: flex; gap: 40px; background: rgba(255,255,255,0.03); padding: 15px 40px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
+                        <div style="text-align: center;">
+                            <div style="font-size: 16px; color: var(--neon-yellow); font-weight: 900; text-transform: uppercase; letter-spacing: 1px;">Separando</div>
+                            <div style="font-size: 45px; color: var(--neon-yellow); font-weight: 900; line-height: 1.1;">${counts.PICKING}</div>
+                        </div>
+                        <div style="width: 2px; background: rgba(255,255,255,0.1);"></div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 16px; color: var(--neon-blue); font-weight: 900; text-transform: uppercase; letter-spacing: 1px;">Faturando</div>
+                            <div style="font-size: 45px; color: var(--neon-blue); font-weight: 900; line-height: 1.1;">${counts.INVOICING}</div>
+                        </div>
+                        <div style="width: 2px; background: rgba(255,255,255,0.1);"></div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 16px; color: var(--neon-orange); font-weight: 900; text-transform: uppercase; letter-spacing: 1px;">Preparar Entrega</div>
+                            <div style="font-size: 45px; color: var(--neon-orange); font-weight: 900; line-height: 1.1;">${counts.CHECKED}</div>
+                        </div>
+                    </div>
+
+                    <!-- Clock -->
+                    <div class="tv-clock-group" style="display: flex; flex-direction: column; align-items: flex-end;">
+                        <div class="tv-clock" style="font-size: 55px; line-height: 1; font-weight: 900; color: #fff;">${clockTime}</div>
+                        <div class="tv-date" style="font-size: 20px; color: rgba(255,255,255,0.6);">${clockDate}</div>
+                    </div>
+                </div>
+
+                <!-- Alerta de Lista de Despacho (aparece quando SEND_READY > 0) -->
+                ${counts.SEND_READY > 0 ? `
+                <div class="dispatch-alert-banner" style="margin: 20px 20px 0 20px;">
+                    <div class="dispatch-alert-banner-icon">🚨</div>
+                    <div class="dispatch-alert-banner-text">
+                        <div class="dispatch-alert-banner-title">LISTA DE DESPACHO PENDENTE!</div>
+                        <div class="dispatch-alert-banner-sub">Acesse o OMS &rarr; Lista de Despacho e realize a expedição dos pedidos conferidos antes de iniciar novas separações.</div>
+                    </div>
+                    <div class="dispatch-alert-banner-count">${counts.SEND_READY}</div>
+                </div>
+                ` : ''}
+
+                <!-- Grid de Pedidos Retirada vs Entrega -->
+                <div class="tv-main-grid">
+                    <!-- Coluna Esquerda: Retiradas -->
+                    <div class="tv-column tv-column-left">
+                        <div class="tv-column-header tv-header-yellow" style="font-size: 26px; padding: 20px; background: linear-gradient(135deg, rgba(241, 196, 15, 0.15), rgba(241, 196, 15, 0.05)); border: 1px solid rgba(241, 196, 15, 0.3); color: var(--neon-yellow);">
+                            <span class="tv-column-title"><span style="font-size: 34px;">🏪</span> RETIRADA EM LOJA</span>
+                            <span class="tv-column-counter" style="background:#000; color:var(--neon-yellow); font-size: 48px; padding: 5px 20px; border-radius: 12px; border: 2px solid var(--neon-yellow);">${retiradas.length}</span>
+                        </div>
+                        <div class="tv-orders-list" id="tv-list-retiradas">
+                            ${retiradas.map(o => renderTVCard(o)).join('')}
+                        </div>
+                    </div>
+
+                    <!-- Coluna Direita: Entregas -->
+                    <div class="tv-column tv-column-right">
+                        <div class="tv-column-header tv-header-blue" style="font-size: 26px; padding: 20px; background: linear-gradient(135deg, rgba(0, 210, 255, 0.15), rgba(0, 210, 255, 0.05)); border: 1px solid rgba(0, 210, 255, 0.3); color: var(--neon-blue);">
+                            <span class="tv-column-title"><span style="font-size: 34px;">🚚</span> SHIPFROM - IFOOD - RAPPI</span>
+                            <span class="tv-column-counter" style="background:#000; color:var(--neon-blue); font-size: 48px; padding: 5px 20px; border-radius: 12px; border: 2px solid var(--neon-blue);">${entregas.length}</span>
+                        </div>
+                        <div class="tv-orders-list" id="tv-list-entregas">
+                            ${entregas.map(o => renderTVCard(o)).join('')}
+                        </div>
+                    </div>
+                </div>
+            `}
+
+            <!-- Footer Informativo -->
+            <div style="font-size: 11px; color:rgba(255,255,255,0.2); text-align:center; padding-top:15px; border-top:1px solid rgba(255,255,255,0.05); margin-top:10px; flex-shrink:0;">
+                ATUALIZAÇÃO EM TEMPO REAL OPERACIONAL DE SLA • SYNC: ${new Date().toLocaleTimeString()}
+            </div>
+        `;
+
+            // Restaurar posições de rolagem instantaneamente
+            const retiradasListElNew = document.getElementById('tv-list-retiradas');
+            const entregasListElNew = document.getElementById('tv-list-entregas');
+            if (retiradasListElNew) retiradasListElNew.scrollTop = scrollRetiradas;
+            if (entregasListElNew) entregasListElNew.scrollTop = scrollEntregas;
+
+            // Tocar alarme de lembrete sonoro se necessário (hands-free alarm loop)
+            const now = Date.now();
+            if ((temPendentes || temGargalosGraves) && (now - lastAlarmPlayedTime > ALARM_COOLDOWN)) {
+                playSiren();
+                lastAlarmPlayedTime = now;
+            }
+        }
+
+        // --- RENDERIZADOR DE CARDS PARA TV ---
+        function renderTVCard(o) {
+            const delivery = parseDeliveryInfo(o);
+            const sla = getSLAInfo(o.createdAt, o.isExpress);
+            const bottleneck = getBottleneckInfo(o);
+
+            // Escolhe o estilo de borda do card baseado na urgência e no gargalo
+            let cardStyleClass = sla.cardClass;
+            if (bottleneck && bottleneck.isCritical) {
+                cardStyleClass = 'tv-card-red';
+            }
+
+            const isPickupOrder = delivery.isPickup;
+            const carrierClass = isPickupOrder ? 'carrier-pickup' : 'carrier-delivery';
+
+            let bottleneckHtml = '';
+            if (bottleneck) {
+                bottleneckHtml = `
+                <div class="tv-bottleneck-alert" style="
+                    background: linear-gradient(90deg, rgba(255, 62, 62, 0.15) 0%, rgba(255, 62, 62, 0.02) 100%);
+                    border-left: 4px solid var(--neon-red);
+                    padding: 8px 12px;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #ff8b8b;
+                    letter-spacing: 0.3px;
+                    margin-top: 4px;
+                ">
+                    ⚠️ ${bottleneck.label}
+                </div>
+            `;
+            }
+
+            // Determina a etiqueta de status do pedido
+            let stageLabel = o.statusNativo;
+            if (o.statusNativo === 'WAITING') stageLabel = 'NOVO';
+            if (o.statusNativo === 'PICKING') stageLabel = 'SEPARANDO';
+            if (o.statusNativo === 'CHECKED') stageLabel = 'CONFERIDO';
+            if (o.statusNativo === 'INVOICING') stageLabel = 'FATURANDO';
+            if (o.statusNativo === 'INVOICING_FAIL') stageLabel = 'FALHA DE FATURAMENTO';
+            if (o.statusNativo === 'SEND_READY') stageLabel = 'CONFERIDO';
+
+            let badgeStyleClass = 'badge-green';
+            if (sla.urgency === 2) badgeStyleClass = 'badge-orange';
+            if (sla.urgency === 3 || (bottleneck && bottleneck.isCritical)) badgeStyleClass = 'badge-red';
+
+            const isIfood = delivery.label.includes('IFOOD');
+            const isRappi = delivery.label.includes('RAPPI');
+            let deliveryGlowStyle = 'border-left: 3px solid var(--neon-blue); padding-left: 8px;';
+            if (isPickupOrder) {
+                deliveryGlowStyle = 'border-left: 3px solid var(--neon-yellow); padding-left: 8px;';
+            } else if (isIfood) {
+                deliveryGlowStyle = 'border-left: 3px solid #ea1d2c; padding-left: 8px;';
+            } else if (isRappi) {
+                deliveryGlowStyle = 'border-left: 3px solid #ff7800; padding-left: 8px;';
+            }
+
+            let deliveryAppTipHtml = '';
+            if (isIfood) {
+                deliveryAppTipHtml = `
+                <div class="tv-delivery-app-tip" style="
+                    background: rgba(234, 29, 44, 0.18);
+                    border: 1px solid rgba(234, 29, 44, 0.4);
+                    color: #ff5c6c;
+                    font-size: 11px;
+                    font-weight: 900;
+                    padding: 8px 12px;
+                    border-radius: 8px;
+                    text-align: center;
+                    margin-top: 6px;
+                    margin-bottom: 4px;
+                    letter-spacing: 0.5px;
+                    animation: heartbeat 2s infinite;
+                ">
+                    📱 ACOMPANHAR/VERIFICAR NO APP GESTOR IFOOD!
+                </div>
+            `;
+            } else if (isRappi) {
+                deliveryAppTipHtml = `
+                <div class="tv-delivery-app-tip" style="
+                    background: rgba(255, 120, 0, 0.18);
+                    border: 1px solid rgba(255, 120, 0, 0.4);
+                    color: #ff9b4d;
+                    font-size: 11px;
+                    font-weight: 900;
+                    padding: 8px 12px;
+                    border-radius: 8px;
+                    text-align: center;
+                    margin-top: 6px;
+                    margin-bottom: 4px;
+                    letter-spacing: 0.5px;
+                    animation: heartbeat 2s infinite;
+                ">
+                    📱 ACOMPANHAR/VERIFICAR NO PORTAL RAPPI!
+                </div>
+            `;
+            }
+
+            const isAtrasado = sla.text.includes('ESTOURADO');
+            const statusText = isAtrasado ? 'ATRASADO' : 'NOVO';
+            const tipoText = isPickupOrder ? 'RETIRADA' : 'ENTREGA';
+            const tipoColor = isPickupOrder ? 'var(--neon-yellow)' : 'var(--neon-blue)';
+            const statusColor = isAtrasado ? 'var(--neon-red)' : 'var(--neon-green)';
+
+            return `
+            <div class="tv-order-card ${cardStyleClass}" style="
+                background: linear-gradient(135deg, rgba(20, 32, 54, 0.95), rgba(13, 22, 38, 0.98)) !important;
+                border-width: 2px !important;
+                box-shadow: 0 12px 30px rgba(0,0,0,0.6) !important;
+            ">
+                <!-- Top Row: NUMERO | TIPO | STATUS | TEMPO -->
+                <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); padding: 10px 15px; border-radius: 10px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.05);">
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        <span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">PEDIDO</span>
+                        <span style="font-size: 18px; font-weight: 900; color: #fff; font-family: 'Lilita One', cursive;">#${o.id}</span>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        <span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">TIPO</span>
+                        <span style="font-size: 16px; font-weight: 900; color: ${tipoColor};">${tipoText}</span>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        <span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">STATUS</span>
+                        <span style="font-size: 16px; font-weight: 900; color: ${statusColor};">${statusText}</span>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 2px; align-items: flex-end;">
+                        <span style="font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 800; text-transform: uppercase;">TEMPO SEPARAÇÃO</span>
+                        <span style="font-size: 20px; font-weight: 900; color: ${isAtrasado ? 'var(--neon-red)' : '#fff'}; font-family: 'Lilita One', cursive;">${sla.text.split(' ').pop()}</span>
+                    </div>
+                </div>
+
+                ${bottleneckHtml}
+                ${deliveryAppTipHtml}
+
+                <!-- Product Items Detail List -->
+                ${(() => {
+                    const itemsList = Array.isArray(o.items) ? o.items : [];
+                    if (itemsList.length === 0) return '';
+                    let itemsHtml = `
+                        <div class="tv-card-items-sublist" style="
+                            display: flex;
+                            flex-direction: column;
+                            gap: 10px;
+                            background: rgba(0, 0, 0, 0.25);
+                            padding: 12px;
+                            border-radius: 8px;
+                            margin-top: 5px;
+                            border: 1px solid rgba(255, 255, 255, 0.04);
+                        ">
+                    `;
+                    itemsList.forEach((item, index) => {
+                        const imgHtml = item.imageUrl
+                            ? `<img src="${item.imageUrl}" style="width: 48px; height: 48px; border-radius: 6px; object-fit: cover; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08);" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />`
+                            : '';
+                        const fallbackImgHtml = `<div style="width: 48px; height: 48px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); display: ${item.imageUrl ? 'none' : 'flex'}; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">🧸</div>`;
+
+                        const isLast = index === itemsList.length - 1;
+                        const borderStyle = isLast ? '' : 'border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 10px;';
+
+                        itemsHtml += `
+                            <div style="display: flex; flex-direction: column; gap: 8px; ${borderStyle}">
+                                <span style="font-size: 14px; font-weight: 800; color: #ffffff; line-height: 1.3;">${item.name}</span>
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    ${imgHtml}
+                                    ${fallbackImgHtml}
+                                    <div style="display: flex; flex-direction: column; flex: 1;">
+                                        <span style="font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, 0.5);">SAP: ${item.sku} | EAN: ${item.ean || '---'}</span>
+                                    </div>
+                                    <span style="font-size: 16px; font-weight: 900; color: var(--neon-green); background: rgba(0, 255, 136, 0.08); padding: 4px 12px; border-radius: 6px; border: 1px solid rgba(0, 255, 136, 0.15); flex-shrink: 0;">QTD: ${item.quantity}</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    itemsHtml += `</div>`;
+                    return itemsHtml;
+                })()}
+            </div>
+        `;
+        }
+
+        // --- REQUISIÇÕES DA API LINX OMS ---
+        async function apiFetch(statuses) {
+            const activeStoreId = getDynamicStoreId() || LOJA_ID;
+            const base = 'https://instore.linxoms.com.br/api/proxy/order-ms/clients/rihappy/fulfillments?';
+            const filter = `filterGroups[1][filters][0][property]=locationId&filterGroups[1][filters][0][condition]=eq&filterGroups[1][filters][0][value]=${activeStoreId}` +
+                `&filterGroups[1][filters][1][property]=status&filterGroups[1][filters][1][operation]=whereIn&` +
+                statuses.map(s => `filterGroups[1][filters][1][value][]=${s}`).join('&');
+
+            try {
+                const r = await fetch(base + filter + '&includes[]=order&pageSize=100');
+                if (!r.ok) throw new Error(`HTTP Error: ${r.status}`);
+                return await r.json();
+            } catch (e) {
+                console.error("Erro na API Linx OMS:", e);
+                return null;
+            }
+        }
+
+        function getDeliveryFromDOM(orderId) {
+            if (!orderId) return { carrier: null, type: null, fullId: null };
+            const baseId = String(orderId).replace('#', '').split('-')[0].trim().toLowerCase();
+            const rows = document.querySelectorAll('table tbody tr');
+
+            for (const row of rows) {
+                let rowId = '';
+                const idElement = row.querySelector('.table-order-id span');
+                if (idElement) rowId = idElement.innerText.trim();
+
+                if (rowId.toLowerCase().includes(baseId) || row.innerHTML.toLowerCase().includes(baseId)) {
+                    let finalId = orderId;
+                    if (rowId && rowId.toLowerCase().includes(baseId)) {
+                        finalId = rowId;
+                    } else {
+                        const regex = new RegExp(baseId + '[-_\\.][0-9]+', 'i');
+                        const fullIdMatch = row.innerHTML.match(regex);
+                        if (fullIdMatch) finalId = fullIdMatch[0];
+                    }
+
+                    let typeText = '';
+                    const typeSpan = row.querySelector('.shipping-type');
+                    if (typeSpan) typeText = typeSpan.innerText.trim();
+
+                    let carrierText = '';
+                    const cells = row.querySelectorAll('td');
+                    cells.forEach(cell => {
+                        const text = cell.innerText.trim();
+                        if (text.toLowerCase().includes('retirada em loja') || text.toLowerCase().includes('uber next day') || text.toLowerCase().includes('sedex')) {
+                            carrierText = text;
+                        }
+                    });
+
+                    return { carrier: carrierText || null, type: typeText || null, fullId: finalId };
+                }
+            }
+            return { carrier: null, type: null, fullId: orderId };
+        }
+
+        // --- CONTROLLER PRINCIPAL DE DADOS (CHECKER) ---
+        async function check() {
+            // Se o usuário foi desconectado, deslogou ou retornou para a tela de autenticação
+            if (!isLinxOmsLoggedIn()) {
+                console.warn("Monitor TV: Sessão encerrada ou tela de login detectada. Ocultando monitor...");
+                if (tvDashboard) tvDashboard.style.display = 'none';
+                if (toggleBtn) toggleBtn.style.display = 'none';
+                if (integrationsUI) integrationsUI.style.display = 'none';
+                if (audioOverlay) audioOverlay.style.display = 'none';
+                const modal = document.getElementById('oms-new-order-modal');
+                if (modal) modal.style.display = 'none';
+                return;
+            } else {
+                if (tvDashboard && currentViewMode === 'TV' && tvDashboard.style.display === 'none') {
+                    tvDashboard.style.display = 'flex';
+                }
+                if (toggleBtn && toggleBtn.style.display === 'none') {
+                    toggleBtn.style.display = 'block';
+                }
+                if (integrationsUI && currentViewMode === 'TV' && integrationsUI.style.display === 'none') {
+                    integrationsUI.style.display = 'flex';
+                }
+            }
+
+            let newList = [];
+
+            // Consulta assíncrona em paralelo para velocidade máxima
+            const [d1, d2, d3] = await Promise.all([
+                apiFetch(['WAITING']),
+                apiFetch(['SEND_READY', 'PICKUP_READY', 'PICKUP_PAID']),
+                apiFetch(['PICKING', 'CHECKED', 'INVOICING', 'INVOICING_FAIL'])
+            ]);
+
+            // Persistir tempos de descoberta para o destaque dos primeiros 30 segundos
+            let discoveryTimes = {};
+            try {
+                discoveryTimes = JSON.parse(sessionStorage.getItem('oms_order_discovery_times') || '{}');
+            } catch (e) {
+                discoveryTimes = {};
+            }
+
+            const processData = (data) => {
+                if (data && data.data) {
+                    data.data.forEach(o => {
+                        let orderBaseId = (o.order && o.order.id) || (o.order && o.order.code) || o.orderId;
+                        let fulfillSuffix = o.fulfillmentId || o.name || o.code || o.id;
+                        let fullFulfillmentId = fulfillSuffix || orderBaseId;
+
+                        if (orderBaseId && fulfillSuffix && orderBaseId !== fulfillSuffix) {
+                            let suffixStr = fulfillSuffix.toString().replace('-', '');
+                            if (suffixStr.length === 1 && !isNaN(suffixStr)) suffixStr = '0' + suffixStr;
+                            if (suffixStr.length <= 4) {
+                                fullFulfillmentId = orderBaseId + '-' + suffixStr;
+                            } else if (fulfillSuffix.toString().includes(orderBaseId)) {
+                                fullFulfillmentId = fulfillSuffix;
+                            }
+                        }
+                        const domInfo = getDeliveryFromDOM(fullFulfillmentId);
+
+                        const apiCarrier = (o.carrier && o.carrier.tradingName) || (o.carrier && o.carrier.companyName) || (o.order && o.order.carrier && o.order.carrier.tradingName) || '';
+                        const apiDeliveryType = (o.shipment && o.shipment.method) || (o.freightMethod && o.freightMethod.name) || '';
+
+                        const deliveryFallback = parseDeliveryInfo({
+                            carrier: apiCarrier || domInfo.carrier,
+                            deliveryType: apiDeliveryType || domInfo.type,
+                            apiType: o.type || o.fulfillmentType
+                        });
+
+                        let finalId = fullFulfillmentId;
+                        if (domInfo.fullId && domInfo.fullId.length > finalId.length) {
+                            finalId = domInfo.fullId;
+                        }
+
+                        const isPickupOrder = deliveryFallback.isPickup;
+
+                        // Inicializar timestamp de descoberta do pedido se não existir
+                        if (!discoveryTimes[finalId]) {
+                            discoveryTimes[finalId] = Date.now();
+                        }
+
+                        // Mapeamento detalhado de produtos/itens da Ri Happy
+                        const itemsData = [];
+                        const apiItems = Array.isArray(o.items)
+                            ? o.items
+                            : ((o.order && Array.isArray(o.order.items)) ? o.order.items : []);
+                        apiItems.forEach(item => {
+                            itemsData.push({
+                                sku: item.sku || item.productCode || item.code || '---',
+                                ean: item.ean || item.barcode || item.gtin || (item.product && item.product.ean) || (item.product && item.product.barcode) || '---',
+                                name: item.name || (item.product && item.product.name) || item.description || 'Produto Ri Happy',
+                                quantity: item.quantity || item.amount || 1,
+                                imageUrl: item.imageUrl || item.image || (item.product && item.product.imageUrl) || ''
+                            });
+                        });
+
+                        if (itemsData.length === 0) {
+                            itemsData.push({
+                                sku: 'PROD-OMS',
+                                ean: '---',
+                                name: 'Produtos Logísticos da Ri Happy',
+                                quantity: o.totalItems || 1,
+                                imageUrl: ''
+                            });
+                        }
+
+                        newList.push({
+                            id: finalId,
+                            createdAt: o.createdAt || (o.order && o.order.createdAt),
+                            updatedAt: o.updatedAt,
+                            customer: (o.customer && o.customer.fullName) || (o.order && o.order.customer && o.order.customer.fullName) || '---',
+                            deliveryType: deliveryFallback.label,
+                            carrier: apiCarrier || domInfo.carrier || '',
+                            statusNativo: o.status || o.fulfillmentStatus || 'WAITING',
+                            isExpress: deliveryFallback.isExpress,
+                            isPickup: isPickupOrder,
+                            itemsCount: (o.items && o.items.length) || o.totalItems || 1,
+                            items: itemsData
+                        });
+                    });
+                }
+            };
+
+            processData(d1);
+            processData(d2);
+            processData(d3);
+
+            try {
+                sessionStorage.setItem('oms_order_discovery_times', JSON.stringify(discoveryTimes));
+            } catch (e) { }
+
+            pedidosAtivosAtuais = newList;
+
+            // Renderizar a tela de TV
+            renderTvView(newList);
+        }
+
+        // --- BACKGROUND WEB WORKER PARA IMPEDIR THROTTLING DO NAVEGADOR ---
+        const workerBlob = new Blob([`
         setInterval(() => postMessage('tick'), ${CHECK_INTERVAL});
     `], { type: 'application/javascript' });
 
-    try {
-        const worker = new Worker(URL.createObjectURL(workerBlob));
-        worker.onmessage = (e) => { if (e.data === 'tick') runCheckTick(); };
-    } catch (e) {
-        console.warn("Worker falhou, usando setInterval padrão local.");
-        setInterval(runCheckTick, CHECK_INTERVAL);
+        try {
+            const worker = new Worker(URL.createObjectURL(workerBlob));
+            worker.onmessage = (e) => { if (e.data === 'tick') check(); };
+        } catch (e) {
+            console.warn("Background worker indisponível, usando fallback de setInterval local.");
+            setInterval(check, CHECK_INTERVAL);
+        }
+
+        // Inicialização da primeira verificação rápida
+        setTimeout(check, 1000);
+
+        // Relógio e refresh visual a cada 1 segundo para clocks de SLA
+        setInterval(() => {
+            if (currentViewMode !== 'NATIVE' && pedidosAtivosAtuais.length > 0) {
+                renderTvView(pedidosAtivosAtuais);
+            }
+        }, 1000);
+
+    } // Fim de initScriptCore
+
+    // --- VERIFICAÇÃO POSITIVA DE AUTENTICAÇÃO NO LINX OMS ---
+    function isLinxOmsLoggedIn() {
+        const hostname = window.location.hostname.toLowerCase();
+        const pathname = window.location.pathname.toLowerCase();
+        const url = window.location.href.toLowerCase();
+
+        // 1. Domínios de autenticação / SSO da Linx (Keycloak Accounts)
+        if (hostname.includes('accounts.linxoms') || hostname.includes('accounts.linx')) {
+            return false;
+        }
+
+        // 2. Rotas típicas de login/autenticação ou realms do Keycloak
+        if (url.includes('/realms/') ||
+            url.includes('/login-actions/') ||
+            url.includes('/auth') ||
+            url.includes('/signin') ||
+            url.includes('/oauth') ||
+            url.includes('/sso') ||
+            pathname.startsWith('/login')) {
+            return false;
+        }
+
+        // 3. Indicadores diretos do DOM de Login (PatternFly / Keycloak / Linx Login)
+        if (document.documentElement.classList.contains('login-pf') ||
+            (document.body && document.body.classList.contains('login-pf'))) {
+            return false;
+        }
+        if (document.querySelector('#kc-form-login, #kc-form, #kc-header, #kc-content, #kc-login, .login-pf-page, .card-pf, .login-pf-header')) {
+            return false;
+        }
+        if (document.querySelector('input[type="password"], input#password, input[name="password"]')) {
+            return false;
+        }
+        if (document.querySelector('form[action*="login-actions"], form[action*="authenticate"], form[action*="login"]')) {
+            return false;
+        }
+
+        // 4. Se não for um domínio Linx OMS ou Rihappy, não validar
+        const isLinxDomain = hostname.includes('linxoms.com.br') || hostname.includes('rihappy.com.br');
+        if (!isLinxDomain) {
+            return false;
+        }
+
+        // 5. Elementos que SÓ EXISTEM após o login concluído no OMS (Navbar, Header, Layout Principal, Filial Logada)
+        const hasHeader = !!document.querySelector('#header, .navbar, nav.navbar, [ui-view="header"], header.main-header, .navbar-fixed-top');
+        const hasMainContent = !!document.querySelector('.main-content, [ui-view="main"], .fulfillments-flow, .step-box, .welcome-title, [ng-controller="indexController"], [ng-controller="mainController"]');
+        const hasUserMenu = !!document.querySelector('.user-info, .navbar-nav, .user-profile, .dropdown-user, .store-info, .branch, #mobile-menu, .menu-header-user');
+        const hasLinxSession = !!(window.linx && window.linx.session && (window.linx.session.currentUser || window.linx.session.currentStore));
+
+        // Se tem qualquer um dos componentes estruturais do OMS pós-login ou sessão do Linx ativa, está confirmado logado!
+        if (hasHeader || hasMainContent || hasUserMenu || hasLinxSession) {
+            return true;
+        }
+
+        // 6. Confirmação complementar por Storage (se ID da Loja existir E container do app AngularJS já estiver renderizado)
+        const storeId = getDynamicStoreId();
+        if (storeId && document.querySelector('body > div, body > nav, [ng-app], .container')) {
+            return true;
+        }
+
+        return false;
     }
 
-    // Inicialização da primeira verificação
-    setTimeout(check, 1000);
-    setInterval(handleRouting, 1500);
+    // --- BOOTSTRAP / VERIFICAÇÃO DE LOGIN ---
+    function checkLoginAndInit() {
+        const url = window.location.href.toLowerCase();
+
+        // Domínios de integração (iFood / Rappi) rodam em background silencioso
+        if (url.includes('ifood.com.br') || url.includes('rappi.com')) {
+            console.log("Monitor TV: Domínio de integração detectado, iniciando core...");
+            initScriptCore();
+            return;
+        }
+
+        // Se estiver no domínio de login SSO (accounts.linxoms), suspende o monitor e aguarda redirecionamento pós-login
+        if (window.location.hostname.includes('accounts.linxoms')) {
+            console.log("Monitor TV: Na tela de autenticação Accounts (Keycloak). Monitor aguardando login...");
+            setTimeout(checkLoginAndInit, 1500);
+            return;
+        }
+
+        // Verifica se o usuário já completou o login no Linx OMS
+        if (isLinxOmsLoggedIn()) {
+            if (!isCoreInitialized) {
+                isCoreInitialized = true;
+                console.log("Monitor TV: ✅ Usuário autenticado no Linx OMS! Inicializando painel da TV...");
+                initScriptCore();
+            } else {
+                // Se já havia sido inicializado e estava oculto após logout anterior
+                if (tvDashboard && currentViewMode === 'TV') {
+                    tvDashboard.style.display = 'flex';
+                }
+                if (toggleBtn) toggleBtn.style.display = 'block';
+                if (integrationsUI && currentViewMode === 'TV') integrationsUI.style.display = 'flex';
+            }
+        } else {
+            console.log("Monitor TV: ⏳ Tela de login ou carregamento detectada. Monitor oculto aguardando autenticação...");
+            setTimeout(checkLoginAndInit, 1000); // Checa a cada 1 segundo
+        }
+    }
+
+    // Inicialização segura aguardando o DOM estar pronto
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', checkLoginAndInit);
+    } else {
+        checkLoginAndInit();
+    }
 
 })();
-
 
 
 
