@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Monitor de Separação - Rihappy
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Monitor discreto para o PC de separação. Realça pedidos na lista de retirada que estão perto de expirar (15 dias). Funciona na lista e no detalhe.
+// @version      1.2
+// @description  Monitor discreto para o PC de separação. Realça pedidos na lista de retirada que estão perto de expirar (7 dias). Funciona na lista e no detalhe.
 // @author       Antigravity
 // @match        *://*/*
 // @grant        none
@@ -11,8 +11,8 @@
 (function() {
     'use strict';
 
-    const DIAS_ALERTA = 13; // Começa a alertar a partir de 13 dias (2 dias antes do vencimento)
-    const DIAS_LIMITE = 15; // Limite para cancelamento
+    const DIAS_ALERTA = 5; // Começa a alertar a partir de 5 dias (2 dias antes do vencimento)
+    const DIAS_LIMITE = 7; // Limite para cancelamento
 
     function parseDate(dateStr) {
         if (!dateStr) return null;
@@ -73,14 +73,14 @@
                         icon = '🚨';
                         highlight = true;
                         row.style.backgroundColor = 'rgba(220, 53, 69, 0.05)';
-                    } else if (daysPassed === 14) {
+                    } else if (daysPassed === DIAS_LIMITE - 1) {
                         color = '#fd7e14'; // Laranja
-                        text = `14 dias (Vence amanhã)`;
+                        text = `${daysPassed} dias (Vence amanhã)`;
                         icon = '⚠️';
                         highlight = true;
-                    } else if (daysPassed === 13) {
+                    } else if (daysPassed === DIAS_LIMITE - 2) {
                         color = '#ffc107'; // Amarelo
-                        text = `13 dias`;
+                        text = `${daysPassed} dias (Faltam 2 dias)`;
                         icon = '⚠️';
                         highlight = true;
                     }
@@ -146,13 +146,13 @@
                     color = '#dc3545';
                     text = `${daysPassed} dias (Cancelar)`;
                     icon = '🚨';
-                } else if (daysPassed === 14) {
+                } else if (daysPassed === DIAS_LIMITE - 1) {
                     color = '#fd7e14';
-                    text = `14 dias (Vence amanhã)`;
+                    text = `${daysPassed} dias (Vence amanhã)`;
                     icon = '⚠️';
-                } else if (daysPassed === 13) {
+                } else if (daysPassed === DIAS_LIMITE - 2) {
                     color = '#ffc107';
-                    text = `13 dias`;
+                    text = `${daysPassed} dias (Faltam 2 dias)`;
                     icon = '⚠️';
                 }
 

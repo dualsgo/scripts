@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Monitor PC Separação - Linx OMNI (Discreto)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Monitor não-invasivo para PC de separação. Alerta de Lista de Despacho e contagem regressiva para Retirada (15 dias) com WhatsApp.
+// @version      1.1
+// @description  Monitor não-invasivo para PC de separação. Alerta de Lista de Despacho e contagem regressiva para Retirada (7 dias) com WhatsApp.
 // @author       Antigravity
 // @match        *://*.linxoms.com.br/*
 // @grant        none
@@ -11,7 +11,7 @@
 (function() {
     'use strict';
 
-    const DIAS_LIMITE = 15;
+    const DIAS_LIMITE = 7;
     const CHECK_INTERVAL = 30000; // 30 segundos
     let lastSendReadyCount = -1;
     let isModalMinimized = false;
@@ -283,12 +283,12 @@
                         icon = '🚨';
                         highlight = true;
                         row.style.backgroundColor = 'rgba(220, 53, 69, 0.05)';
-                    } else if (daysPassed === 14) {
+                    } else if (daysPassed === DIAS_LIMITE - 1) {
                         color = '#fd7e14';
                         text = `Falta 1 dia (Vence amanhã)`;
                         icon = '⚠️';
                         highlight = true;
-                    } else if (daysPassed === 13) {
+                    } else if (daysPassed === DIAS_LIMITE - 2) {
                         color = '#ffc107';
                         text = `Faltam 2 dias`;
                         icon = '⚠️';
@@ -388,11 +388,11 @@
                     color = '#dc3545';
                     text = `Passaram ${daysPassed} dias (Cancelar)`;
                     icon = '🚨';
-                } else if (daysPassed === 14) {
+                } else if (daysPassed === DIAS_LIMITE - 1) {
                     color = '#fd7e14';
                     text = `Falta 1 dia (Vence amanhã)`;
                     icon = '⚠️';
-                } else if (daysPassed === 13) {
+                } else if (daysPassed === DIAS_LIMITE - 2) {
                     color = '#ffc107';
                     text = `Faltam 2 dias`;
                     icon = '⚠️';
