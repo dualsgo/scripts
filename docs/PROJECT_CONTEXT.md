@@ -25,8 +25,10 @@ scripts/
 ├── Defeitos/                             # Ferramenta auditora e relatórios de defeito (defect-auditor)
 ├── Flash/                                # Interface leve para controle de campanhas flash
 │
-├── MASTER_SCRIPT.user.js                 # Script compilado unificado para Tampermonkey
-├── build_master.js                       # Script Node.js que compila o MASTER_SCRIPT
+├── MASTER_MONITOR_OMNI.user.js          # Suíte completa e unificada de Monitoramento OMNI (Tampermonkey)
+├── MASTER_SCRIPT.user.js                 # Script consolidado sincronizado para Tampermonkey
+├── build_monitor_omni.js                 # Script Node.js que compila a suíte MASTER_MONITOR_OMNI
+├── build_master.js                       # Script Node.js de build utilitário
 │
 ├── oms_monitor.js                        # Script principal de monitoramento visual do OMS
 ├── oms_monitor_apoio_chrome.user.js      # Userscript de apoio ao OMS para Google Chrome

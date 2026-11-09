@@ -4,6 +4,8 @@
   "description": "",
   "main": "check.js",
   "scripts": {
+    "build:monitor": "node build_monitor_omni.js",
+    "build:test": "node build_test_optimized.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

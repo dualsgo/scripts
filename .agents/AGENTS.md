@@ -8,14 +8,16 @@ Este repositório consiste em um conjunto de **Userscripts (Tampermonkey/Greasem
 ## 🛠️ Módulos e Estrutura Principal
 
 ### 1. 🖥️ Monitores & Painéis OMS (Tampermonkey Userscripts)
+- **`MASTER_MONITOR_OMNI.user.js` / `MASTER_SCRIPT.user.js`**:
+  - Script consolidado unificado que reúne todos os recursos de monitoramento OMNI em um único arquivo: Painel TV Fullscreen, Sirenes, Monitor PC Separação/Despacho, SLA 7 Dias Retirada com WhatsApp, Coletor iFood e Coletor Rappi.
+- **`build_monitor_omni.js`**:
+  - Compilador Node.js (`npm run build:monitor`) que consolida todos os módulos de monitoramento OMNI no arquivo final.
 - **`oms_monitor.js` / `oms_monitor_apoio_chrome.user.js` / `oms_monitor_apoio_firefox.user.js`**:
-  - Monitor operacional de pedidos em tempo real com suporte a modo **TV / Hands-free**.
-  - Alertas sonoros, contadores em tela cheia, sinalizadores visuais neon, controle de pedidos pendentes, faturamento, separação e prontos para envio.
-  - Sincronização via `GM_setValue`/`GM_getValue` com outros portais (ex: iFood).
+  - Módulos individuais do monitor operacional em tempo real com suporte a modo **TV / Hands-free**.
 - **`oms_monitor_mobile.user.js` & `oms_monitor_pc_separacao.user.js`**:
   - Adaptações de layout do monitor para dispositivos móveis e terminais de separação em PC.
 - **`rihappy_monitor_separacao.user.js`**:
-  - Painel visual focado no fluxo de separação de mercadorias da loja Ri Happy.
+  - Painel visual focado no fluxo de separação e controle de retirada de mercadorias da loja Ri Happy.
 
 ### 2. ⚡ Automação OMS & Integração WhatsApp
 - **`oms-automation.user.js`**:
