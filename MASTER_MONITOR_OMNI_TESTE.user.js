@@ -16,9 +16,12 @@
 // @match        https://*.99app.com/*
 // @match        https://*.99food.com/*
 // @match        https://*.didiglobal.com/*
+// @match        https://*.didi-food.com/*
+// @match        https://didi-food.com/*
 // @connect      linxoms.com.br
 // @connect      rihappy.com.br
 // @connect      separador.ifood.com.br
+// @connect      b.didi-food.com
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
@@ -49,7 +52,7 @@
     // Roteamento inteligente de domínios (Hub de Separação: Linx OMS + iFood + Rappi + 99)
     const isIfood = currentHost.includes('ifood.com.br');
     const isRappi = currentHost.includes('rappi.com');
-    const is99 = currentHost.includes('99app.com') || currentHost.includes('99food.com') || currentHost.includes('didiglobal.com');
+    const is99 = currentHost.includes('didi-food.com') || currentHost.includes('99app.com') || currentHost.includes('99food.com') || currentHost.includes('didiglobal.com');
     const isLinxOms = currentHost.includes('linxoms.com.br') || currentHost.includes('rihappy.com.br');
 
     console.log('[OMNI MONITOR] Iniciando no domínio:', currentHost);
@@ -407,10 +410,19 @@
     }
 
     // =========================================================================
-    // 2.5 MÓDULO DE MONITORAMENTO & COLETA 99 (SEGUNDO PLANO)
+    // 2.5 MÓDULO DE MONITORAMENTO & COLETA 99 / DIDI-FOOD (INTERCEPTAÇÃO PASSIVA XHR/FETCH + SEGUNDO PLANO)
     // =========================================================================
+    // O portal didi-food.com já faz polling assinado (wsgsig) de newOrders, preparingPicking e push/polling
+    // a cada ~20-30s. Interceptamos passivamente as respostas JSON sem gerar requisições extras nem quebrar wsgsig!
     if (is99) {
         let n99ModalElement = null;
+        let didiNewOrdersCount = 0;
+        let didiPendingPickCount = 0;
+        let didiNewOrdersList = [];
+        let didiPendingPickList = [];
+        let didiDetailCache = new Map();
+        let didiApiActive = false;
+        let didiLoggedInFromApi = true;
 
         function update99Modal(count) {
             if (!n99ModalElement) {
@@ -431,45 +443,178 @@
             }
         }
 
-        function poll99() {
-            let isLoggedIn = true;
-            let newOrdersCount = 0;
+        function mapDidiOrderToHub(ord) {
+            if (!ord || typeof ord !== 'object') return null;
+            const orderId = String(ord.orderId || ord.id || '');
+            const displayNum = ord.displayNum || (ord.orderIndex && ord.orderIndex.displayText) || (ord.orderIndex ? `#${ord.orderIndex}` : (orderId ? orderId.slice(-4) : 'NOVO'));
+            const cachedDetail = orderId ? didiDetailCache.get(orderId) : null;
+            const rawItems = (cachedDetail && Array.isArray(cachedDetail.items))
+                ? cachedDetail.items
+                : (Array.isArray(ord.items) ? ord.items : (Array.isArray(ord.itemList) ? ord.itemList : []));
 
-            try {
-                if (document.querySelector('input[type="password"]')) {
-                    isLoggedIn = false;
-                } else {
-                    // Seletores resilientes para portal 99Food / 99 Merchant (badges de novos pedidos e cards pendentes)
-                    const pendingBadges = document.querySelectorAll('[data-testid*="new-order"], [class*="new-order"] [class*="badge"], .order-new-count, .pending-order-card');
-                    if (pendingBadges.length > 0) {
-                        let parsed = 0;
-                        pendingBadges.forEach(el => {
-                            const n = parseInt((el.textContent || '').replace(/[^0-9]/g, ''), 10);
-                            if (!isNaN(n) && n > parsed) parsed = n;
-                        });
-                        newOrdersCount = parsed || pendingBadges.length;
-                    }
+            const mappedItems = rawItems
+                .filter(it => !it.isCancelled)
+                .map(it => ({
+                    sku: it.extId || it.sku || it.itemID || '99FOOD',
+                    ean: (Array.isArray(it.upcList) && it.upcList.length > 0) ? String(it.upcList[0]) : (it.ean || '---'),
+                    name: it.name || 'Produto 99',
+                    quantity: Number(it.count || it.quantity || 1),
+                    imageUrl: it.headImg || it.imageUrl || ''
+                }));
+
+            return {
+                id: `99-${String(displayNum).replace('#', '')}`,
+                statusNativo: 'WAITING',
+                createdAt: ord.createTime ? new Date(Number(ord.createTime) * 1000).toISOString() : new Date().toISOString(),
+                isExpress: true,
+                isPickup: false,
+                carrier: '99 ENTREGA',
+                deliveryType: '99',
+                customerName: (ord.receiverInfo && ord.receiverInfo.name) || 'Portal 99',
+                items: mappedItems
+            };
+        }
+
+        function sync99StateToHub() {
+            const isLoggedIn = !document.querySelector('input[type="password"]') && didiLoggedInFromApi;
+            const totalPending = didiNewOrdersCount + didiPendingPickCount;
+
+            // Combina listas de newOrders + pending_pick sem duplicar por id
+            const combinedOrders = [];
+            const seenIds = new Set();
+            [...didiNewOrdersList, ...didiPendingPickList].forEach(rawOrd => {
+                const mapped = mapDidiOrderToHub(rawOrd);
+                if (mapped && !seenIds.has(mapped.id)) {
+                    seenIds.add(mapped.id);
+                    combinedOrders.push(mapped);
                 }
-                update99Modal(newOrdersCount);
-            } catch (e) {
-                console.error("[OMNI MONITOR] Erro no coletor 99:", e);
-            }
+            });
 
-            GM_setValue('n99PendingOrders', newOrdersCount);
+            update99Modal(totalPending);
+            GM_setValue('n99PendingOrders', totalPending);
+            GM_setValue('n99OrdersList', combinedOrders.length > 0 ? JSON.stringify(combinedOrders) : null);
             GM_setValue('n99LastUpdate', Date.now());
             GM_setValue('n99LoggedIn', isLoggedIn);
         }
 
-        const n99WorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 5000);`], { type: 'application/javascript' });
+        function handleDidiApiResponse(url, json) {
+            if (!url || !json || typeof json !== 'object') return;
+            try {
+                // Erro de autenticação DiDi (sessão expirada)
+                if (json.errno === 101 || json.errno === 401 || json.errno === 403 || json.errno === 20001) {
+                    didiLoggedInFromApi = false;
+                    sync99StateToHub();
+                    return;
+                }
+                if (json.errno === 0) {
+                    didiLoggedInFromApi = true;
+                    didiApiActive = true;
+                }
+
+                const data = json.data;
+                if (!data || typeof data !== 'object') return;
+
+                // 1. Pedidos Novos aguardando aceite: /order/borderV2/newOrders
+                if (url.includes('/order/borderV2/newOrders')) {
+                    didiNewOrdersCount = Number(data.totalCount || 0);
+                    didiNewOrdersList = Array.isArray(data.orderList) ? data.orderList : [];
+                    sync99StateToHub();
+                }
+                // 2. Pedidos Aguardando Separação (quando Aceitar Automaticamente está ativo): /order/borderV2/preparingPicking
+                else if (url.includes('/order/borderV2/preparingPicking')) {
+                    const sec = data.secondTabCount || {};
+                    didiPendingPickCount = Number(sec.pending_pick || 0);
+                    const rawList = Array.isArray(data.orderList) ? data.orderList : [];
+                    // Se pending_pick > 0, guarda os pedidos da lista para exibir no Hub
+                    didiPendingPickList = didiPendingPickCount > 0 ? rawList.slice(0, didiPendingPickCount) : [];
+                    sync99StateToHub();
+                }
+                // 3. Detalhes de um pedido com items (extId=SAP, upcList=EAN, headImg=Foto): /order/border/detailV2
+                else if (url.includes('/order/border/detailV2') && data.orderId) {
+                    didiDetailCache.set(String(data.orderId), data);
+                    sync99StateToHub();
+                }
+                // 4. Heartbeat: /push/polling ou /shop/shopOnlineStatus
+                else if (url.includes('/push/polling') || url.includes('/shop/shopOnlineStatus')) {
+                    GM_setValue('n99LastUpdate', Date.now());
+                    GM_setValue('n99LoggedIn', didiLoggedInFromApi);
+                }
+            } catch (e) {
+                console.error("[OMNI MONITOR] Erro ao processar JSON da 99/DiDi:", e);
+            }
+        }
+
+        // Hook passivo em XMLHttpRequest (DiDi usa XHR/Axios para chamadas b.didi-food.com)
+        try {
+            const origXhrOpen = XMLHttpRequest.prototype.open;
+            const origXhrSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+                this._omsDidiUrl = typeof url === 'string' ? url : String(url || '');
+                return origXhrOpen.call(this, method, url, ...rest);
+            };
+            XMLHttpRequest.prototype.send = function (...args) {
+                this.addEventListener('load', function () {
+                    try {
+                        const u = this._omsDidiUrl || '';
+                        if (u.includes('b.didi-food.com/order/') || u.includes('b.didi-food.com/push/') || u.includes('b.didi-food.com/shop/')) {
+                            if (this.responseText) {
+                                const parsed = JSON.parse(this.responseText);
+                                handleDidiApiResponse(u, parsed);
+                            }
+                        }
+                    } catch (e) { }
+                });
+                return origXhrSend.apply(this, args);
+            };
+        } catch (e) { }
+
+        // Hook passivo em window.fetch (garantia caso algum endpoint use fetch)
+        try {
+            const origDidiFetch = window.fetch;
+            window.fetch = function (...args) {
+                const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
+                return origDidiFetch.apply(this, args).then(res => {
+                    try {
+                        if (reqUrl.includes('b.didi-food.com/order/') || reqUrl.includes('b.didi-food.com/push/') || reqUrl.includes('b.didi-food.com/shop/')) {
+                            res.clone().json().then(json => handleDidiApiResponse(reqUrl, json)).catch(() => { });
+                        }
+                    } catch (e) { }
+                    return res;
+                });
+            };
+        } catch (e) { }
+
+        // Heartbeat leve a cada 8s para manter o status "99: Online" vivo no Hub + fallback DOM se API ainda não disparou
+        function poll99Heartbeat() {
+            const isLoggedIn = !document.querySelector('input[type="password"]') && didiLoggedInFromApi;
+            if (!didiApiActive && isLoggedIn) {
+                let domCount = 0;
+                try {
+                    const tabs = Array.from(document.querySelectorAll('div, span, button, a'));
+                    const aguardandoEl = tabs.find(el => {
+                        const t = (el.textContent || '').trim().toLowerCase();
+                        return t.startsWith('aguardando separação') && t.length < 32;
+                    });
+                    if (aguardandoEl) {
+                        const match = aguardandoEl.textContent.match(/\d+/);
+                        if (match) domCount = parseInt(match[0], 10);
+                    }
+                } catch (e) { }
+                didiPendingPickCount = domCount;
+            }
+            sync99StateToHub();
+        }
+
+        const n99WorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 8000);`], { type: 'application/javascript' });
         try {
             const n99Worker = new Worker(URL.createObjectURL(n99WorkerBlob));
-            n99Worker.onmessage = (e) => { if (e.data === 'tick') poll99(); };
+            n99Worker.onmessage = (e) => { if (e.data === 'tick') poll99Heartbeat(); };
         } catch (e) {
-            setInterval(poll99, 5000);
+            setInterval(poll99Heartbeat, 8000);
         }
-        setTimeout(poll99, 1500);
+        setTimeout(poll99Heartbeat, 1500);
 
-        console.log("[OMNI MONITOR] Coletor 99 ativo em segundo plano.");
+        console.log("[OMNI MONITOR] Coletor 99 (DiDi Food) ativo com interceptação passiva XHR/Fetch em segundo plano.");
         return;
     }
 
@@ -2485,25 +2630,43 @@
                 }
             }
 
-            // --- INJETAR PEDIDOS DA 99 NAS ENTREGAS ---
+            // --- INJETAR PEDIDOS DA 99 (INTERCEPTAÇÃO DIDI-FOOD COM ITENS OU FALLBACK) ---
             const n99Pending = parseInt(GM_getValue('n99PendingOrders', 0), 10);
             const n99Update = parseInt(GM_getValue('n99LastUpdate', 0), 10);
             const is99Alive = (Date.now() - n99Update) < 60000;
             const n99Logged = GM_getValue('n99LoggedIn', false);
 
+            let n99OrdersList = [];
+            try {
+                const n99Str = GM_getValue('n99OrdersList', null);
+                if (n99Str) {
+                    const parsed99 = JSON.parse(n99Str);
+                    if (Array.isArray(parsed99)) n99OrdersList = parsed99;
+                }
+            } catch (e) { }
+
+            let has99DetailedItems = false;
             if (is99Alive && n99Pending > 0) {
-                for (let i = 0; i < n99Pending; i++) {
-                    entregas.unshift({
-                        id: `99-${i + 1}`,
-                        statusNativo: 'WAITING',
-                        createdAt: new Date().toISOString(),
-                        isExpress: true,
-                        isPickup: false,
-                        carrier: '99 ENTREGA',
-                        deliveryType: '99',
-                        customerName: 'Aceitar no Portal 99',
-                        items: []
+                if (n99OrdersList.length > 0 && n99OrdersList.some(o => Array.isArray(o.items) && o.items.length > 0)) {
+                    has99DetailedItems = true;
+                    n99OrdersList.forEach(ord => {
+                        entregas.unshift(ord);
+                        pedidosNovosWaiting.unshift(ord);
                     });
+                } else {
+                    for (let i = 0; i < n99Pending; i++) {
+                        entregas.unshift({
+                            id: `99-${i + 1}`,
+                            statusNativo: 'WAITING',
+                            createdAt: new Date().toISOString(),
+                            isExpress: true,
+                            isPickup: false,
+                            carrier: '99 ENTREGA',
+                            deliveryType: '99',
+                            customerName: 'Aceitar no Portal 99',
+                            items: []
+                        });
+                    }
                 }
             }
 
@@ -2611,7 +2774,7 @@
                     color: '#ff6d00'
                 });
             }
-            if (is99Alive && n99Pending > 0) {
+            if (is99Alive && n99Pending > 0 && !has99DetailedItems) {
                 criticalAlerts.push({
                     type: '99',
                     count: n99Pending,
@@ -2619,7 +2782,7 @@
                     brand: '99 ENTREGA',
                     icon: '🚕',
                     title: 'NOVO PEDIDO 99!',
-                    subtitle: 'Abra a aba do Portal 99 para aceitar o pedido e iniciar a separação.',
+                    subtitle: 'Abra a aba do Portal 99 (DiDi Food) para aceitar o pedido e iniciar a separação.',
                     color: '#ffea00'
                 });
             }
