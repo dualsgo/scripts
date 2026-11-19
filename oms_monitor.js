@@ -13,8 +13,12 @@
 // @match        https://*.rappi.com/*
 // @match        https://*.rappi.com.br/*
 // @match        https://mitienda.rappi.com.br/*
+// @match        https://*.99app.com/*
+// @match        https://*.99food.com/*
+// @match        https://*.didiglobal.com/*
 // @connect      linxoms.com.br
 // @connect      rihappy.com.br
+// @connect      separador.ifood.com.br
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
@@ -42,94 +46,153 @@
     const currentHost = window.location.hostname;
     const currentHref = window.location.href;
 
-    // Roteamento inteligente de domínios
+    // Roteamento inteligente de domínios (Hub de Separação: Linx OMS + iFood + Rappi + 99)
     const isIfood = currentHost.includes('ifood.com.br');
     const isRappi = currentHost.includes('rappi.com');
+    const is99 = currentHost.includes('99app.com') || currentHost.includes('99food.com') || currentHost.includes('didiglobal.com');
     const isLinxOms = currentHost.includes('linxoms.com.br') || currentHost.includes('rihappy.com.br');
 
     console.log('[OMNI MONITOR] Iniciando no domínio:', currentHost);
 
+    // Helper compartilhado para modal flutuante de alto contraste nas abas de Delivery (iFood, Rappi, 99)
+    function createDeliveryPortalModal({ id, brandName, brandColor, icon, subtitle }) {
+        let existing = document.getElementById(id);
+        if (existing) return existing;
+
+        const fontLink = document.createElement('link');
+        fontLink.rel = 'stylesheet';
+        fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@700;800;900&family=JetBrains+Mono:wght@800&family=Plus+Jakarta+Sans:wght@800;900&display=swap';
+        document.head.appendChild(fontLink);
+
+        const style = document.createElement('style');
+        style.innerHTML = `
+            @keyframes pulseDelivery_${id} {
+                0%, 100% { box-shadow: 0 0 25px ${brandColor}66, 0 20px 50px rgba(0,0,0,0.9); border-color: ${brandColor}; }
+                50% { box-shadow: 0 0 60px ${brandColor}cc, 0 20px 60px rgba(0,0,0,0.95); border-color: #ffffff; }
+            }
+            #${id} {
+                position: fixed;
+                top: 28px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #000000;
+                border: 4px solid ${brandColor};
+                border-radius: 22px;
+                padding: 20px 38px;
+                z-index: 9999999;
+                display: none;
+                align-items: center;
+                gap: 24px;
+                font-family: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+                color: #ffffff;
+                animation: pulseDelivery_${id} 1.4s infinite ease-in-out;
+                pointer-events: none;
+                min-width: 440px;
+                box-sizing: border-box;
+            }
+            #${id}.show { display: flex; }
+        `;
+        document.head.appendChild(style);
+
+        const el = document.createElement('div');
+        el.id = id;
+        el.innerHTML = `
+            <div style="font-size: 52px; line-height: 1;">${icon}</div>
+            <div style="display: flex; flex-direction: column; gap: 4px; flex: 1;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="background: ${brandColor}; color: #000000; font-size: 13px; font-weight: 900; padding: 3px 10px; border-radius: 6px; letter-spacing: 0.08em; text-transform: uppercase;">NOVO PEDIDO</span>
+                    <span style="font-size: 24px; font-weight: 900; color: ${brandColor}; letter-spacing: 0.04em; text-transform: uppercase;">${brandName}</span>
+                </div>
+                <div style="font-size: 14px; font-weight: 700; color: rgba(255,255,255,0.85); text-transform: uppercase; letter-spacing: 0.05em;">${subtitle}</div>
+            </div>
+            <div id="${id}-count" style="font-family: 'JetBrains Mono', monospace; font-size: 54px; font-weight: 800; color: #ffffff; background: #000000; border: 3px solid ${brandColor}; border-radius: 14px; padding: 6px 20px; line-height: 1;">0</div>
+        `;
+        document.body.appendChild(el);
+        return el;
+    }
+
     // =========================================================================
-    // 1. MÓDULO DE MONITORAMENTO & COLETA IFOOD
+    // 1. MÓDULO DE MONITORAMENTO & COLETA IFOOD (BFF API OTIMIZADA + FALLBACK DOM)
     // =========================================================================
     if (isIfood) {
         let ifoodModalElement = null;
+        let capturedAuthHeader = '';
+        let capturedSelectedStores = '';
+        let isFetchingIfood = false;
+        const ifoodOrderDetailCache = new Map(); // Cache O(1) de detalhes por orderId (evita re-fetch repetido)
 
-        function createIfoodVisualModal() {
-            if (ifoodModalElement) return;
+        // Interceptação passiva do window.fetch para capturar Bearer token e x-selected-stores sem sobrecarga
+        try {
+            const origFetch = window.fetch;
+            window.fetch = function (...args) {
+                try {
+                    const reqInit = args[1] || {};
+                    const headers = reqInit.headers || (args[0] && args[0].headers);
+                    if (headers) {
+                        if (typeof headers.get === 'function') {
+                            const auth = headers.get('authorization') || headers.get('Authorization');
+                            const stores = headers.get('x-selected-stores');
+                            if (auth) capturedAuthHeader = auth;
+                            if (stores) capturedSelectedStores = stores;
+                        } else if (typeof headers === 'object') {
+                            const auth = headers.Authorization || headers.authorization;
+                            const stores = headers['x-selected-stores'] || headers['X-Selected-Stores'];
+                            if (auth) capturedAuthHeader = auth;
+                            if (stores) capturedSelectedStores = stores;
+                        }
+                    }
+                } catch (e) { }
+                return origFetch.apply(this, args);
+            };
+        } catch (e) { }
 
-            const fontLink = document.createElement('link');
-            fontLink.rel = 'stylesheet';
-            fontLink.href = 'https://fonts.googleapis.com/css2?family=Lilita+One&display=swap';
-            document.head.appendChild(fontLink);
+        function getCookieVal(name) {
+            try {
+                const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+                return match ? decodeURIComponent(match[1]) : '';
+            } catch (e) {
+                return '';
+            }
+        }
 
-            const style = document.createElement('style');
-            style.innerHTML = `
-                @keyframes pulseIfoodRed {
-                    0% { box-shadow: 0 0 25px rgba(234, 29, 44, 0.4); border-color: #ea1d2c; }
-                    50% { box-shadow: 0 0 60px rgba(234, 29, 44, 0.9); border-color: #ff3e3e; }
-                    100% { box-shadow: 0 0 25px rgba(234, 29, 44, 0.4); border-color: #ea1d2c; }
-                }
-                .ifood-alert-modal {
-                    position: fixed;
-                    top: 40px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    background: linear-gradient(135deg, rgba(20, 0, 0, 0.95), rgba(40, 0, 0, 0.98));
-                    border: 4px solid #ea1d2c;
-                    border-radius: 24px;
-                    padding: 25px 45px;
-                    z-index: 9999999;
-                    display: none;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    box-shadow: 0 20px 60px rgba(234, 29, 44, 0.5);
-                    backdrop-filter: blur(15px);
-                    font-family: 'Lilita One', cursive, sans-serif;
-                    color: #fff;
-                    animation: pulseIfoodRed 1.5s infinite ease-in-out;
-                    pointer-events: none;
-                }
-                .ifood-alert-modal.show {
-                    display: flex;
-                }
-                .ifood-alert-title {
-                    font-size: 26px;
-                    color: #ff3e3e;
-                    text-transform: uppercase;
-                    margin-bottom: 8px;
-                    letter-spacing: 1px;
-                }
-                .ifood-alert-count {
-                    font-size: 48px;
-                    color: #fff;
-                    margin: 5px 0;
-                    text-shadow: 0 0 20px #ea1d2c;
-                }
-                .ifood-alert-sub {
-                    font-size: 16px;
-                    color: #aaa;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                }
-            `;
-            document.head.appendChild(style);
+        function getIfoodAuthAndStores() {
+            let auth = capturedAuthHeader;
+            if (!auth) {
+                const tokenCookie = getCookieVal('sm_auth_token');
+                if (tokenCookie) auth = tokenCookie.startsWith('Bearer ') ? tokenCookie : ('Bearer ' + tokenCookie);
+            }
 
-            ifoodModalElement = document.createElement('div');
-            ifoodModalElement.className = 'ifood-alert-modal';
-            ifoodModalElement.innerHTML = `
-                <div class="ifood-alert-title">🚨 NOVO PEDIDO IFOOD PENDENTE! 🚨</div>
-                <div class="ifood-alert-count" id="ifood-modal-count">0</div>
-                <div class="ifood-alert-sub">PEDIDO(S) AGUARDANDO ACEITE / SEPARAÇÃO</div>
-            `;
-            document.body.appendChild(ifoodModalElement);
+            let storeIds = [];
+            if (capturedSelectedStores) {
+                storeIds = capturedSelectedStores.split(',').map(s => s.trim()).filter(Boolean);
+            }
+            if (storeIds.length === 0) {
+                try {
+                    const rawStores = getCookieVal('sm_store');
+                    if (rawStores) {
+                        const parsed = JSON.parse(rawStores);
+                        if (Array.isArray(parsed)) {
+                            storeIds = parsed.map(s => (typeof s === 'string' ? s : (s && (s.id || s.storeId || s.merchantId)))).filter(Boolean);
+                        } else if (parsed && typeof parsed === 'object' && parsed.id) {
+                            storeIds = [parsed.id];
+                        }
+                    }
+                } catch (e) { }
+            }
+            return { auth, storeIds };
         }
 
         function updateIfoodModal(count) {
-            createIfoodVisualModal();
-            if (!ifoodModalElement) return;
-            const countEl = document.getElementById('ifood-modal-count');
+            if (!ifoodModalElement) {
+                ifoodModalElement = createDeliveryPortalModal({
+                    id: 'ifood-alert-modal-hub',
+                    brandName: 'IFOOD SEPARADOR',
+                    brandColor: '#ff1744',
+                    icon: '🛵',
+                    subtitle: 'PEDIDO(S) AGUARDANDO SEPARAÇÃO IMEDIATA'
+                });
+            }
+            const countEl = document.getElementById('ifood-alert-modal-hub-count');
             if (count > 0) {
                 if (countEl) countEl.innerText = count;
                 ifoodModalElement.classList.add('show');
@@ -138,215 +201,167 @@
             }
         }
 
-        setInterval(() => {
+        async function pollIfoodBff() {
+            if (isFetchingIfood) return;
+            isFetchingIfood = true;
+
             let newOrdersCount = 0;
             let aguardandoColetaCount = 0;
-            let isLoggedIn = true;
+            let isLoggedIn = !document.querySelector('input[type="password"]');
+            let collectedOrders = [];
 
             try {
-                if (document.querySelector('input[type="password"]')) {
-                    isLoggedIn = false;
-                }
+                const isSeparadorHost = currentHost.includes('separador.ifood.com.br');
+                const { auth, storeIds } = getIfoodAuthAndStores();
 
-                const pedidosLink = document.querySelector('a[href*="/order/latest"]');
-                if (pedidosLink) {
-                    const outputEl = pedidosLink.querySelector('output');
+                if (isSeparadorHost && isLoggedIn && auth && storeIds.length > 0) {
+                    const commonHeaders = {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'Authorization': auth,
+                        'x-selected-stores': storeIds.join(',')
+                    };
+
+                    // 1. Única requisição leve de contadores: POST /bff/v1/order/counters
+                    const countersRes = await fetch('/bff/v1/order/counters', {
+                        method: 'POST',
+                        headers: commonHeaders,
+                        body: JSON.stringify({ storeIds })
+                    });
+
+                    if (countersRes.status === 401 || countersRes.status === 403) {
+                        isLoggedIn = false;
+                    } else if (countersRes.ok) {
+                        const countersJson = await countersRes.json();
+                        const cData = (countersJson && countersJson.data) || {};
+                        newOrdersCount = Number(cData.issued || 0);
+                        aguardandoColetaCount = Number(cData.awaitingDeliveryTakeout || 0);
+
+                        // 2. SOMENTE se houver pedidos novos (issued > 0), busca a lista e detalhes em cache O(1)
+                        if (newOrdersCount > 0) {
+                            const listRes = await fetch('/bff/v1/order/new-orders', {
+                                method: 'POST',
+                                headers: commonHeaders,
+                                body: JSON.stringify({ currentPage: 1, pageSize: 20, storeIds, filters: {} })
+                            });
+                            if (listRes.ok) {
+                                const listJson = await listRes.json();
+                                const rawOrders = (listJson && listJson.data && Array.isArray(listJson.data.data)) ? listJson.data.data : [];
+
+                                // Limpa cache de pedidos que já saíram da fila
+                                const activeIds = new Set(rawOrders.map(o => o.id).filter(Boolean));
+                                for (const cachedId of ifoodOrderDetailCache.keys()) {
+                                    if (!activeIds.has(cachedId)) ifoodOrderDetailCache.delete(cachedId);
+                                }
+
+                                for (const ord of rawOrders) {
+                                    const ordId = ord.id;
+                                    if (!ordId) continue;
+
+                                    let detail = ifoodOrderDetailCache.get(ordId);
+                                    if (!detail) {
+                                        try {
+                                            const detRes = await fetch(`/bff/v2/order/details/${ordId}`, {
+                                                method: 'GET',
+                                                headers: commonHeaders
+                                            });
+                                            if (detRes.ok) {
+                                                const detJson = await detRes.json();
+                                                detail = (detJson && detJson.data) || null;
+                                                if (detail) ifoodOrderDetailCache.set(ordId, detail);
+                                            }
+                                        } catch (e) { }
+                                    }
+
+                                    const flatItems = [];
+                                    if (detail && Array.isArray(detail.items)) {
+                                        detail.items.forEach(group => {
+                                            const groupItems = Array.isArray(group.items) ? group.items : [group];
+                                            groupItems.forEach(it => {
+                                                const prod = it.product || it;
+                                                flatItems.push({
+                                                    sku: prod.sku || prod.skuOriginal || 'IFOOD',
+                                                    ean: prod.ean || '---',
+                                                    name: prod.name || 'Produto iFood',
+                                                    quantity: Number(it.quantity || it.originalQuantity || 1),
+                                                    imageUrl: prod.imageUrlFull || prod.imageUrl || ''
+                                                });
+                                            });
+                                        });
+                                    }
+
+                                    collectedOrders.push({
+                                        id: `IFOOD-${(detail && detail.code) || ord.code || ord.shortCode || ordId.slice(0, 6)}`,
+                                        statusNativo: 'WAITING',
+                                        createdAt: (detail && detail.createdAt) || ord.createdAt || new Date().toISOString(),
+                                        isExpress: true,
+                                        isPickup: false,
+                                        carrier: 'IFOOD EXPRESS',
+                                        deliveryType: 'IFOOD',
+                                        customerName: (detail && detail.customer && detail.customer.name) || 'App Separador iFood',
+                                        items: flatItems
+                                    });
+                                }
+                            }
+                        } else {
+                            ifoodOrderDetailCache.clear();
+                        }
+                    }
+                } else if (isLoggedIn) {
+                    // Fallback DOM leve caso esteja em outro portal iFood ou antes de capturar header BFF
+                    const pedidosLink = document.querySelector('a[href*="/order/latest"]');
+                    const outputEl = pedidosLink ? pedidosLink.querySelector('output') : document.querySelector('output[aria-label*="pedidos"]');
                     if (outputEl && outputEl.textContent) {
                         const val = parseInt(outputEl.textContent.trim(), 10);
                         if (!isNaN(val)) newOrdersCount = val;
                     }
-                } else {
-                    const outputByAria = document.querySelector('output[aria-label*="pedidos"]');
-                    if (outputByAria && outputByAria.textContent) {
-                        const val = parseInt(outputByAria.textContent.trim(), 10);
-                        if (!isNaN(val)) newOrdersCount = val;
-                    } else {
-                        const pElements = Array.from(document.querySelectorAll('p'));
-                        const pedidosP = pElements.find(p => p.textContent && p.textContent.trim().toLowerCase() === 'pedidos');
-                        if (pedidosP && pedidosP.parentElement) {
-                            const outputEl = pedidosP.parentElement.querySelector('output');
-                            if (outputEl && outputEl.textContent) {
-                                const val = parseInt(outputEl.textContent.trim(), 10);
-                                if (!isNaN(val)) newOrdersCount = val;
-                            }
-                        }
-                    }
                 }
 
-                try {
-                    const expedicaoLink = document.querySelector('a[href*="/order/expedition"]');
-                    if (expedicaoLink) {
-                        const outputEl = expedicaoLink.querySelector('output');
-                        if (outputEl && outputEl.textContent) {
-                            const val = parseInt(outputEl.textContent.replace(/[^0-9]/g, ''), 10);
-                            if (!isNaN(val)) aguardandoColetaCount = val;
-                        }
-                    }
-
-                    if (aguardandoColetaCount === 0) {
-                        const headers = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, span, div, button'));
-                        const prontoEl = headers.find(el => {
-                            const t = el.textContent ? el.textContent.trim().toLowerCase() : '';
-                            return t === 'prontos' || t === 'pronto' || t === 'aguardando entregador' || t === 'aguardando coleta' || t === 'expedição';
-                        });
-                        if (prontoEl && prontoEl.parentElement) {
-                            const numEl = prontoEl.parentElement.querySelector('output, span.badge, div.badge');
-                            if (numEl && numEl.textContent) {
-                                const val = parseInt(numEl.textContent.replace(/[^0-9]/g, ''), 10);
-                                if (!isNaN(val)) aguardandoColetaCount = val;
-                            } else {
-                                const txt = prontoEl.parentElement.textContent.replace(/[^0-9]/g, '');
-                                if (txt) aguardandoColetaCount = parseInt(txt, 10);
-                            }
-                        }
-                    }
-                } catch (e) { }
-
-                let ifoodOrderDetails = null;
-                try {
-                    const h1s = Array.from(document.querySelectorAll('h1'));
-                    const orderH1 = h1s.find(h => h.textContent && h.textContent.includes('IFOOD') && h.textContent.includes('#'));
-                    if (orderH1) {
-                        let prazo = "NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO";
-                        const pElements = Array.from(document.querySelectorAll('p'));
-                        const prazoEl = pElements.find(p => p.textContent && (p.textContent.toLowerCase().includes('inicie em') || p.textContent.toLowerCase().includes('separar até')));
-                        if (prazoEl) {
-                            prazo = prazoEl.textContent.trim().toUpperCase();
-                        } else {
-                            const h1Times = h1s.find(h => h.textContent && h.textContent.includes(':'));
-                            if (h1Times) prazo = "INICIE EM " + h1Times.textContent.trim() + " HORAS";
-                        }
-
-                        let items = [];
-                        const productNames = document.querySelectorAll('[data-testid^="product-card-"] p[id^="product-name-"]');
-                        if (productNames.length === 0) {
-                            const fallbackNames = document.querySelectorAll('[id^="product-name-"]');
-                            fallbackNames.forEach(p => { items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: '' }); });
-                        } else {
-                            productNames.forEach(p => {
-                                let imgUrl = '';
-                                const card = p.closest('[data-testid^="product-card-"]');
-                                if (card) {
-                                    const img = card.querySelector('img');
-                                    if (img) imgUrl = img.src;
-                                }
-                                items.push({ name: p.textContent.trim(), quantity: 1, imageUrl: imgUrl });
-                            });
-                        }
-
-                        if (items.length > 0) {
-                            ifoodOrderDetails = {
-                                id: 'IFOOD-DETALHADO',
-                                statusNativo: 'WAITING',
-                                createdAt: new Date().toISOString(),
-                                isExpress: true,
-                                carrier: prazo,
-                                deliveryType: 'EXPRESS',
-                                customerName: 'App Separador iFood',
-                                items: items
-                            };
-                        }
-                    }
-                } catch (e) { }
-
-                GM_setValue('ifoodOrderDetails', ifoodOrderDetails ? JSON.stringify(ifoodOrderDetails) : null);
                 updateIfoodModal(newOrdersCount);
-
+                GM_setValue('ifoodOrdersList', collectedOrders.length > 0 ? JSON.stringify(collectedOrders) : null);
+                GM_setValue('ifoodOrderDetails', collectedOrders.length > 0 ? JSON.stringify(collectedOrders[0]) : null);
             } catch (e) {
-                console.error("[OMNI MONITOR] Erro no coletor iFood:", e);
+                console.error("[OMNI MONITOR] Erro no coletor iFood BFF:", e);
+            } finally {
+                GM_setValue('ifoodPendingOrders', newOrdersCount);
+                GM_setValue('ifoodAguardandoColeta', aguardandoColetaCount);
+                GM_setValue('ifoodLastUpdate', Date.now());
+                GM_setValue('ifoodLoggedIn', isLoggedIn);
+                isFetchingIfood = false;
             }
+        }
 
-            GM_setValue('ifoodPendingOrders', newOrdersCount);
-            GM_setValue('ifoodAguardandoColeta', aguardandoColetaCount);
-            GM_setValue('ifoodLastUpdate', Date.now());
-            GM_setValue('ifoodLoggedIn', isLoggedIn);
-        }, 3000);
+        // Polling BFF otimizado (8s) + Web Worker anti-throttling em segundo plano
+        const ifoodWorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 8000);`], { type: 'application/javascript' });
+        try {
+            const ifoodWorker = new Worker(URL.createObjectURL(ifoodWorkerBlob));
+            ifoodWorker.onmessage = (e) => { if (e.data === 'tick') pollIfoodBff(); };
+        } catch (e) {
+            setInterval(pollIfoodBff, 8000);
+        }
+        setTimeout(pollIfoodBff, 1500);
 
-        console.log("[OMNI MONITOR] Coletor iFood ativo e sincronizando via GM Storage.");
+        console.log("[OMNI MONITOR] Coletor iFood BFF API ativo em segundo plano (8s).");
         return;
     }
 
     // =========================================================================
-    // 2. MÓDULO DE MONITORAMENTO & COLETA RAPPI
+    // 2. MÓDULO DE MONITORAMENTO & COLETA RAPPI (SEGUNDO PLANO)
     // =========================================================================
     if (isRappi) {
         let rappiModalElement = null;
 
-        function createRappiVisualModal() {
-            if (rappiModalElement) return;
-
-            const fontLink = document.createElement('link');
-            fontLink.rel = 'stylesheet';
-            fontLink.href = 'https://fonts.googleapis.com/css2?family=Lilita+One&display=swap';
-            document.head.appendChild(fontLink);
-
-            const style = document.createElement('style');
-            style.innerHTML = `
-                @keyframes pulseRappiOrange {
-                    0% { box-shadow: 0 0 25px rgba(255, 68, 56, 0.4); border-color: #ff4438; }
-                    50% { box-shadow: 0 0 60px rgba(255, 68, 56, 0.9); border-color: #ff6b5c; }
-                    100% { box-shadow: 0 0 25px rgba(255, 68, 56, 0.4); border-color: #ff4438; }
-                }
-                .rappi-alert-modal {
-                    position: fixed;
-                    top: 40px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    background: linear-gradient(135deg, rgba(25, 10, 5, 0.95), rgba(45, 15, 5, 0.98));
-                    border: 4px solid #ff4438;
-                    border-radius: 24px;
-                    padding: 25px 45px;
-                    z-index: 9999999;
-                    display: none;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    box-shadow: 0 20px 60px rgba(255, 68, 56, 0.5);
-                    backdrop-filter: blur(15px);
-                    font-family: 'Lilita One', cursive, sans-serif;
-                    color: #fff;
-                    animation: pulseRappiOrange 1.5s infinite ease-in-out;
-                    pointer-events: none;
-                }
-                .rappi-alert-modal.show {
-                    display: flex;
-                }
-                .rappi-alert-title {
-                    font-size: 26px;
-                    color: #ff6b5c;
-                    text-transform: uppercase;
-                    margin-bottom: 8px;
-                    letter-spacing: 1px;
-                }
-                .rappi-alert-count {
-                    font-size: 48px;
-                    color: #fff;
-                    margin: 5px 0;
-                    text-shadow: 0 0 20px #ff4438;
-                }
-                .rappi-alert-sub {
-                    font-size: 16px;
-                    color: #aaa;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                }
-            `;
-            document.head.appendChild(style);
-
-            rappiModalElement = document.createElement('div');
-            rappiModalElement.className = 'rappi-alert-modal';
-            rappiModalElement.innerHTML = `
-                <div class="rappi-alert-title">🛵 NOVO PEDIDO RAPPI PENDENTE! 🛵</div>
-                <div class="rappi-alert-count" id="rappi-modal-count">0</div>
-                <div class="rappi-alert-sub">PEDIDO(S) AGUARDANDO ACEITE / SEPARAÇÃO</div>
-            `;
-            document.body.appendChild(rappiModalElement);
-        }
-
         function updateRappiModal(count) {
-            createRappiVisualModal();
-            if (!rappiModalElement) return;
-            const countEl = document.getElementById('rappi-modal-count');
+            if (!rappiModalElement) {
+                rappiModalElement = createDeliveryPortalModal({
+                    id: 'rappi-alert-modal-hub',
+                    brandName: 'RAPPI GESTOR',
+                    brandColor: '#ff6d00',
+                    icon: '🟠',
+                    subtitle: 'PEDIDO(S) AGUARDANDO ACEITE / SEPARAÇÃO'
+                });
+            }
+            const countEl = document.getElementById('rappi-alert-modal-hub-count');
             if (count > 0) {
                 if (countEl) countEl.innerText = count;
                 rappiModalElement.classList.add('show');
@@ -355,7 +370,7 @@
             }
         }
 
-        setInterval(() => {
+        function pollRappi() {
             let isLoggedIn = true;
             let newOrdersCount = 0;
             let aguardandoColetaCount = 0;
@@ -366,20 +381,7 @@
                 } else {
                     const cards = document.querySelectorAll('app-kind-order .order-card, app-kind-order .order-item, app-order-card, .order-card-container');
                     newOrdersCount = cards.length;
-
-                    try {
-                        const tabs = Array.from(document.querySelectorAll('a, button, div.tab, span'));
-                        const prontoTab = tabs.find(el => {
-                            const t = el.textContent ? el.textContent.trim().toLowerCase() : '';
-                            return t.includes('pronto') || t.includes('entregador') || t.includes('coleta');
-                        });
-                        if (prontoTab) {
-                            const val = parseInt(prontoTab.textContent.replace(/[^0-9]/g, ''), 10);
-                            if (!isNaN(val)) aguardandoColetaCount = val;
-                        }
-                    } catch (e) { }
                 }
-
                 updateRappiModal(newOrdersCount);
             } catch (e) {
                 console.error("[OMNI MONITOR] Erro no coletor Rappi:", e);
@@ -389,9 +391,85 @@
             GM_setValue('rappiAguardandoColeta', aguardandoColetaCount);
             GM_setValue('rappiLastUpdate', Date.now());
             GM_setValue('rappiLoggedIn', isLoggedIn);
-        }, 3000);
+        }
 
-        console.log("[OMNI MONITOR] Coletor Rappi ativo e sincronizando via GM Storage.");
+        const rappiWorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 5000);`], { type: 'application/javascript' });
+        try {
+            const rappiWorker = new Worker(URL.createObjectURL(rappiWorkerBlob));
+            rappiWorker.onmessage = (e) => { if (e.data === 'tick') pollRappi(); };
+        } catch (e) {
+            setInterval(pollRappi, 5000);
+        }
+        setTimeout(pollRappi, 1500);
+
+        console.log("[OMNI MONITOR] Coletor Rappi ativo em segundo plano.");
+        return;
+    }
+
+    // =========================================================================
+    // 2.5 MÓDULO DE MONITORAMENTO & COLETA 99 (SEGUNDO PLANO)
+    // =========================================================================
+    if (is99) {
+        let n99ModalElement = null;
+
+        function update99Modal(count) {
+            if (!n99ModalElement) {
+                n99ModalElement = createDeliveryPortalModal({
+                    id: 'n99-alert-modal-hub',
+                    brandName: '99 ENTREGA',
+                    brandColor: '#ffea00',
+                    icon: '🚕',
+                    subtitle: 'PEDIDO(S) AGUARDANDO ACEITE / SEPARAÇÃO'
+                });
+            }
+            const countEl = document.getElementById('n99-alert-modal-hub-count');
+            if (count > 0) {
+                if (countEl) countEl.innerText = count;
+                n99ModalElement.classList.add('show');
+            } else {
+                n99ModalElement.classList.remove('show');
+            }
+        }
+
+        function poll99() {
+            let isLoggedIn = true;
+            let newOrdersCount = 0;
+
+            try {
+                if (document.querySelector('input[type="password"]')) {
+                    isLoggedIn = false;
+                } else {
+                    // Seletores resilientes para portal 99Food / 99 Merchant (badges de novos pedidos e cards pendentes)
+                    const pendingBadges = document.querySelectorAll('[data-testid*="new-order"], [class*="new-order"] [class*="badge"], .order-new-count, .pending-order-card');
+                    if (pendingBadges.length > 0) {
+                        let parsed = 0;
+                        pendingBadges.forEach(el => {
+                            const n = parseInt((el.textContent || '').replace(/[^0-9]/g, ''), 10);
+                            if (!isNaN(n) && n > parsed) parsed = n;
+                        });
+                        newOrdersCount = parsed || pendingBadges.length;
+                    }
+                }
+                update99Modal(newOrdersCount);
+            } catch (e) {
+                console.error("[OMNI MONITOR] Erro no coletor 99:", e);
+            }
+
+            GM_setValue('n99PendingOrders', newOrdersCount);
+            GM_setValue('n99LastUpdate', Date.now());
+            GM_setValue('n99LoggedIn', isLoggedIn);
+        }
+
+        const n99WorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 5000);`], { type: 'application/javascript' });
+        try {
+            const n99Worker = new Worker(URL.createObjectURL(n99WorkerBlob));
+            n99Worker.onmessage = (e) => { if (e.data === 'tick') poll99(); };
+        } catch (e) {
+            setInterval(poll99, 5000);
+        }
+        setTimeout(poll99, 1500);
+
+        console.log("[OMNI MONITOR] Coletor 99 ativo em segundo plano.");
         return;
     }
 
@@ -1050,6 +1128,7 @@
         let announcedOrderIds = new Set();
         let lastIfoodAnnouncedCount = 0;
         let lastRappiAnnouncedCount = 0;
+        let last99AnnouncedCount = 0;
         let lastDispatchAnnouncedCount = 0;
         let activeRotationalIndex = 0;
         let lastRotationTime = 0;
@@ -2053,7 +2132,7 @@
         integrationsUI.className = 'tv-integrations-status';
         integrationsUI.setAttribute('role', 'status');
         integrationsUI.setAttribute('aria-live', 'polite');
-        integrationsUI.setAttribute('aria-label', 'Status das integrações iFood e Rappi');
+        integrationsUI.setAttribute('aria-label', 'Status das integrações iFood, Rappi e 99');
         document.body.appendChild(integrationsUI);
 
         function updateIntegrationsStatus() {
@@ -2071,6 +2150,10 @@
             const rappiLogged = GM_getValue('rappiLoggedIn', false);
             const rappiActive = (Date.now() - rappiLast) < 60000;
 
+            const n99Last = parseInt(GM_getValue('n99LastUpdate', 0), 10);
+            const n99Logged = GM_getValue('n99LoggedIn', false);
+            const n99Active = (Date.now() - n99Last) < 60000;
+
             let ifoodDot = 'dot-gray'; let ifoodText = 'iFood: Inativo';
             if (ifoodActive) {
                 if (ifoodLogged) { ifoodDot = 'dot-green'; ifoodText = 'iFood: Online'; }
@@ -2083,7 +2166,13 @@
                 else { rappiDot = 'dot-red'; rappiText = 'Rappi: Deslogado'; }
             }
 
-            const sig = `${ifoodDot}|${ifoodText}|${rappiDot}|${rappiText}`;
+            let n99Dot = 'dot-gray'; let n99Text = '99: Inativo';
+            if (n99Active) {
+                if (n99Logged) { n99Dot = 'dot-green'; n99Text = '99: Online'; }
+                else { n99Dot = 'dot-red'; n99Text = '99: Deslogado'; }
+            }
+
+            const sig = `${ifoodDot}|${ifoodText}|${rappiDot}|${rappiText}|${n99Dot}|${n99Text}`;
             if (sig === lastIntegrationsSignature) return;
             lastIntegrationsSignature = sig;
 
@@ -2095,6 +2184,10 @@
                 <div class="integration-pill">
                     <div class="status-dot ${rappiDot}" aria-hidden="true"></div>
                     <div>${rappiText}</div>
+                </div>
+                <div class="integration-pill">
+                    <div class="status-dot ${n99Dot}" aria-hidden="true"></div>
+                    <div>${n99Text}</div>
                 </div>
             `;
         }
@@ -2326,51 +2419,89 @@
             const retiradas = pedidosVisiveisCards.filter(o => o.isPickup);
             const entregas = pedidosVisiveisCards.filter(o => !o.isPickup);
 
-            // --- INJETAR CARDS MOCK DO IFOOD NAS ENTREGAS ---
-            const ifoodPendingCards = parseInt(GM_getValue('ifoodPendingOrders', 0), 10);
-            const ifoodUpdateCards = parseInt(GM_getValue('ifoodLastUpdate', 0), 10);
-            const isIfoodAliveCards = (Date.now() - ifoodUpdateCards) < 60000;
+            // --- INJETAR PEDIDOS DO IFOOD (BFF API COM ITENS COMPLETOS OU FALLBACK) ---
+            const ifoodPending = parseInt(GM_getValue('ifoodPendingOrders', 0), 10);
+            const ifoodUpdate = parseInt(GM_getValue('ifoodLastUpdate', 0), 10);
+            const isIfoodAlive = (Date.now() - ifoodUpdate) < 60000;
+            const ifoodLogged = GM_getValue('ifoodLoggedIn', false);
 
-            let ifoodOrderDetails = null;
+            let ifoodOrdersList = [];
             try {
-                const detailsStr = GM_getValue('ifoodOrderDetails', null);
-                if (detailsStr) ifoodOrderDetails = JSON.parse(detailsStr);
+                const listStr = GM_getValue('ifoodOrdersList', null);
+                if (listStr) {
+                    const parsedList = JSON.parse(listStr);
+                    if (Array.isArray(parsedList)) ifoodOrdersList = parsedList;
+                }
+                if (ifoodOrdersList.length === 0) {
+                    const detailsStr = GM_getValue('ifoodOrderDetails', null);
+                    if (detailsStr) ifoodOrdersList = [JSON.parse(detailsStr)];
+                }
             } catch (e) { }
 
-            if (isIfoodAliveCards && ifoodPendingCards > 0) {
-                if (ifoodOrderDetails) {
-                    entregas.unshift(ifoodOrderDetails);
+            let hasIfoodDetailedItems = false;
+            if (isIfoodAlive && ifoodPending > 0) {
+                if (ifoodOrdersList.length > 0 && ifoodOrdersList.some(o => Array.isArray(o.items) && o.items.length > 0)) {
+                    hasIfoodDetailedItems = true;
+                    ifoodOrdersList.forEach(ord => {
+                        entregas.unshift(ord);
+                        pedidosNovosWaiting.unshift(ord);
+                    });
                 } else {
-                    for (let i = 0; i < ifoodPendingCards; i++) {
+                    for (let i = 0; i < ifoodPending; i++) {
                         entregas.unshift({
-                            id: `NOVO-IFOOD-${i + 1}`,
+                            id: `IFOOD-${i + 1}`,
                             statusNativo: 'WAITING',
                             createdAt: new Date().toISOString(),
                             isExpress: true,
-                            carrier: 'NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO',
-                            deliveryType: 'EXPRESS',
-                            customerName: 'Acesse o App Separador',
+                            isPickup: false,
+                            carrier: 'IFOOD EXPRESS',
+                            deliveryType: 'IFOOD',
+                            customerName: 'Acesse o App Separador iFood',
                             items: []
                         });
                     }
                 }
             }
 
-            // --- INJETAR CARDS MOCK DO RAPPI NAS ENTREGAS ---
-            const rappiPendingCards = parseInt(GM_getValue('rappiPendingOrders', 0), 10);
-            const rappiUpdateCards = parseInt(GM_getValue('rappiLastUpdate', 0), 10);
-            const isRappiAliveCards = (Date.now() - rappiUpdateCards) < 60000;
+            // --- INJETAR PEDIDOS DO RAPPI NAS ENTREGAS ---
+            const rappiPending = parseInt(GM_getValue('rappiPendingOrders', 0), 10);
+            const rappiUpdate = parseInt(GM_getValue('rappiLastUpdate', 0), 10);
+            const isRappiAlive = (Date.now() - rappiUpdate) < 60000;
+            const rappiLogged = GM_getValue('rappiLoggedIn', false);
 
-            if (isRappiAliveCards && rappiPendingCards > 0) {
-                for (let i = 0; i < rappiPendingCards; i++) {
+            if (isRappiAlive && rappiPending > 0) {
+                for (let i = 0; i < rappiPending; i++) {
                     entregas.unshift({
-                        id: `NOVO-RAPPI-${i + 1}`,
+                        id: `RAPPI-${i + 1}`,
                         statusNativo: 'WAITING',
                         createdAt: new Date().toISOString(),
                         isExpress: true,
-                        carrier: 'ACEITAR NO GESTOR RAPPI',
-                        deliveryType: 'EXPRESS',
-                        customerName: 'Pedido Rappi Pendente',
+                        isPickup: false,
+                        carrier: 'RAPPI EXPRESS',
+                        deliveryType: 'RAPPI',
+                        customerName: 'Aceitar no Gestor Rappi',
+                        items: []
+                    });
+                }
+            }
+
+            // --- INJETAR PEDIDOS DA 99 NAS ENTREGAS ---
+            const n99Pending = parseInt(GM_getValue('n99PendingOrders', 0), 10);
+            const n99Update = parseInt(GM_getValue('n99LastUpdate', 0), 10);
+            const is99Alive = (Date.now() - n99Update) < 60000;
+            const n99Logged = GM_getValue('n99LoggedIn', false);
+
+            if (is99Alive && n99Pending > 0) {
+                for (let i = 0; i < n99Pending; i++) {
+                    entregas.unshift({
+                        id: `99-${i + 1}`,
+                        statusNativo: 'WAITING',
+                        createdAt: new Date().toISOString(),
+                        isExpress: true,
+                        isPickup: false,
+                        carrier: '99 ENTREGA',
+                        deliveryType: '99',
+                        customerName: 'Aceitar no Portal 99',
                         items: []
                     });
                 }
@@ -2387,48 +2518,41 @@
             const clockTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
             const clockDate = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).toUpperCase();
 
-            // --- LEITURA DO GESTOR IFOOD VIA TAMPERMONKEY STORAGE ---
-            let ifoodAlertHtml = '';
-            const ifoodPending = parseInt(GM_getValue('ifoodPendingOrders', 0), 10);
-            const ifoodUpdate = parseInt(GM_getValue('ifoodLastUpdate', 0), 10);
-            const isIfoodAlive = (Date.now() - ifoodUpdate) < 60000;
-
-            if (isIfoodAlive && ifoodPending > 0) {
-                ifoodAlertHtml = `
-                <div style="background: linear-gradient(135deg, rgba(234, 29, 44, 0.2), rgba(234, 29, 44, 0.05)); border: 3px solid #ea1d2c; border-radius: 16px; padding: 14px 28px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; animation: pulseRedGlow 1.5s infinite ease-in-out; flex-shrink: 0;">
-                    <div style="display:flex; align-items:center; gap: 20px;">
-                        <span style="font-size: 46px; animation: heartbeat 1s infinite;">🛵</span>
+            // --- BANNERS DE NOTIFICAÇÃO DELIVERY (IFOOD / RAPPI / 99) EM ALTO CONTRASTE ---
+            const renderDeliveryBanner = (color, icon, badge, title, subtitle, count) => `
+                <div style="background: #000000; border: 3px solid ${color}; border-radius: 14px; padding: 12px 24px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; animation: pulseRedGlow 1.5s infinite ease-in-out; flex-shrink: 0; gap: 18px;">
+                    <div style="display:flex; align-items:center; gap: 16px;">
+                        <span style="font-size: 38px; line-height: 1;">${icon}</span>
                         <div>
-                            <div style="font-size: 26px; font-weight: 900; color: #ea1d2c; text-transform: uppercase; letter-spacing: 1px;">NOVO PEDIDO IFOOD PENDENTE SEPARAÇÃO</div>
-                            <div style="font-size: 16px; font-weight: 700; color: rgba(255,255,255,0.85);">Abra o App Separador do iFood para visualizar e separar o pedido.</div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="background: ${color}; color: #000000; font-size: 13px; font-weight: 900; padding: 2px 10px; border-radius: 6px; letter-spacing: 0.08em; text-transform: uppercase;">${badge}</span>
+                                <span style="font-size: clamp(18px, 1.8vw, 24px); font-weight: 900; color: ${color}; text-transform: uppercase; letter-spacing: 0.04em;">${title}</span>
+                            </div>
+                            <div style="font-size: 15px; font-weight: 700; color: rgba(255,255,255,0.88); margin-top: 2px;">${subtitle}</div>
                         </div>
                     </div>
-                    <div style="font-size: 56px; font-weight: 900; color: #ea1d2c; font-family: 'Lilita One', cursive; line-height: 1; text-shadow: 0 0 20px rgba(234, 29, 44, 0.5);">${ifoodPending}</div>
-                </div>`;
-            }
+                    <div class="num-tabular" style="font-size: clamp(34px, 3.2vw, 48px); font-weight: 800; color: #ffffff; background: #000000; border: 3px solid ${color}; border-radius: 12px; padding: 4px 18px; line-height: 1;">${count}</div>
+                </div>
+            `;
 
-            // --- LEITURA DO GESTOR RAPPI VIA TAMPERMONKEY STORAGE ---
-            let rappiAlertHtml = '';
-            const rappiPending = parseInt(GM_getValue('rappiPendingOrders', 0), 10);
-            const rappiUpdate = parseInt(GM_getValue('rappiLastUpdate', 0), 10);
-            const isRappiAlive = (Date.now() - rappiUpdate) < 60000;
-
-            if (isRappiAlive && rappiPending > 0) {
-                rappiAlertHtml = `
-                <div style="background: linear-gradient(135deg, rgba(255, 69, 0, 0.2), rgba(255, 69, 0, 0.05)); border: 3px solid #ff4500; border-radius: 16px; padding: 14px 28px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; animation: pulseRedGlow 1.5s infinite ease-in-out; flex-shrink: 0;">
-                    <div style="display:flex; align-items:center; gap: 20px;">
-                        <span style="font-size: 46px; animation: heartbeat 1s infinite;">🛵</span>
-                        <div>
-                            <div style="font-size: 26px; font-weight: 900; color: #ff4500; text-transform: uppercase; letter-spacing: 1px;">GESTOR RAPPI: ATENÇÃO!</div>
-                            <div style="font-size: 16px; font-weight: 700; color: rgba(255,255,255,0.85);">Há ${rappiPending} pedido(s) esperando aceite no portal do Rappi.</div>
-                        </div>
-                    </div>
-                    <div style="font-size: 56px; font-weight: 900; color: #ff4500; font-family: 'Lilita One', cursive; line-height: 1; text-shadow: 0 0 20px rgba(255, 69, 0, 0.5);">${rappiPending}</div>
-                </div>`;
-            }
+            const ifoodAlertHtml = (isIfoodAlive && ifoodPending > 0)
+                ? renderDeliveryBanner('#ff1744', '🛵', 'DELIVERY', 'IFOOD: PEDIDO PENDENTE DE SEPARAÇÃO', 'Abra o App Separador iFood para iniciar a separação imediata.', ifoodPending)
+                : '';
+            const rappiAlertHtml = (isRappiAlive && rappiPending > 0)
+                ? renderDeliveryBanner('#ff6d00', '🟠', 'DELIVERY', 'RAPPI: PEDIDO AGUARDANDO ACEITE', 'Abra o Gestor Rappi para aceitar e separar o pedido.', rappiPending)
+                : '';
+            const n99AlertHtml = (is99Alive && n99Pending > 0)
+                ? renderDeliveryBanner('#ffea00', '🚕', 'DELIVERY', '99 ENTREGA: PEDIDO AGUARDANDO ACEITE', 'Abra o Portal 99 para aceitar e separar o pedido.', n99Pending)
+                : '';
 
             // Criar estrutura base do Dashboard se vazio (Considerando integrações externas e despachos)
-            const isListEmpty = (pedidosVisiveisCards.length === 0 && counts.SEND_READY === 0 && !(isIfoodAlive && ifoodPending > 0) && !(isRappiAlive && rappiPending > 0));
+            const isListEmpty = (
+                pedidosVisiveisCards.length === 0 &&
+                counts.SEND_READY === 0 &&
+                !(isIfoodAlive && ifoodPending > 0) &&
+                !(isRappiAlive && rappiPending > 0) &&
+                !(is99Alive && n99Pending > 0)
+            );
 
             // 3. Checar Destaques dos primeiros 30 segundos (Apenas pedidos WAITING / Novos)
             let discoveryTimes = {};
@@ -2440,7 +2564,7 @@
 
             const newOrdersInHighlight = pedidosNovosWaiting.filter(o =>
                 discoveryTimes[o.id] &&
-                (Date.now() - discoveryTimes[o.id]) < ((o.id.includes('IFOOD') || o.id.includes('RAPPI')) ? 10000 : 30000)
+                (Date.now() - discoveryTimes[o.id]) < ((o.id.includes('IFOOD') || o.id.includes('RAPPI') || o.id.includes('99-')) ? 15000 : 30000)
             );
 
             let activeHighlightOrder = null;
@@ -2449,14 +2573,61 @@
             let percent = 0;
             let isRotation = false;
 
-            // 4. Checar Alertas Críticos (Lista de Despacho)
+            // 4. Checar Alertas Críticos (Lista de Despacho + Modais de Notificação Delivery iFood / Rappi / 99)
             const criticalAlerts = [];
-            if (counts.SEND_READY > 0) criticalAlerts.push({ type: 'DISPATCH', count: counts.SEND_READY, id: 'VIRTUAL-DISPATCH', title: 'LISTA DE DESPACHO', color: 'var(--neon-yellow)' });
+            if (counts.SEND_READY > 0) {
+                criticalAlerts.push({
+                    type: 'DISPATCH',
+                    count: counts.SEND_READY,
+                    id: 'VIRTUAL-DISPATCH',
+                    brand: 'LISTA DE DESPACHO',
+                    icon: '🚨',
+                    title: 'LISTA DE DESPACHO PENDENTE',
+                    subtitle: 'Acesse o OMS → Lista de Despacho e realize a expedição dos pedidos conferidos.',
+                    color: '#ffea00'
+                });
+            }
+            if (isIfoodAlive && ifoodPending > 0 && !hasIfoodDetailedItems) {
+                criticalAlerts.push({
+                    type: 'IFOOD',
+                    count: ifoodPending,
+                    id: 'VIRTUAL-IFOOD',
+                    brand: 'IFOOD SEPARADOR',
+                    icon: '🛵',
+                    title: 'NOVO PEDIDO IFOOD!',
+                    subtitle: 'Abra a aba do Separador iFood para visualizar os itens e iniciar a separação.',
+                    color: '#ff1744'
+                });
+            }
+            if (isRappiAlive && rappiPending > 0) {
+                criticalAlerts.push({
+                    type: 'RAPPI',
+                    count: rappiPending,
+                    id: 'VIRTUAL-RAPPI',
+                    brand: 'RAPPI GESTOR',
+                    icon: '🟠',
+                    title: 'NOVO PEDIDO RAPPI!',
+                    subtitle: 'Abra a aba do Gestor Rappi para aceitar o pedido e iniciar a separação.',
+                    color: '#ff6d00'
+                });
+            }
+            if (is99Alive && n99Pending > 0) {
+                criticalAlerts.push({
+                    type: '99',
+                    count: n99Pending,
+                    id: 'VIRTUAL-99',
+                    brand: '99 ENTREGA',
+                    icon: '🚕',
+                    title: 'NOVO PEDIDO 99!',
+                    subtitle: 'Abra a aba do Portal 99 para aceitar o pedido e iniciar a separação.',
+                    color: '#ffea00'
+                });
+            }
 
             const isDismissedByOperator = Date.now() < highlightDismissedUntil;
 
             if (!isDismissedByOperator && criticalAlerts.length > 0) {
-                const alertIndex = Math.floor(Date.now() / 5000) % criticalAlerts.length;
+                const alertIndex = Math.floor(Date.now() / 6000) % criticalAlerts.length;
                 activeHighlightOrder = {
                     isVirtualAlert: true,
                     ...criticalAlerts[alertIndex]
@@ -2531,34 +2702,52 @@
 
             if (activeHighlightOrder) {
                 if (activeHighlightOrder.isVirtualAlert) {
-                    // --- RENDERIZA O MODAL DE ALERTA CRÍTICO (TELA TRAVADA) ---
-                    modalEl.setAttribute('data-showing-id', activeHighlightOrder.id);
-                    modalEl.setAttribute('data-is-rotation', 'false');
-                    modalEl.className = 'new-order-modal';
-                    modalEl.style.borderColor = activeHighlightOrder.color;
-                    modalEl.style.boxShadow = `0 20px 60px ${activeHighlightOrder.color}80`;
+                    // --- MODAL DE NOTIFICAÇÃO DELIVERY (IFOOD / RAPPI / 99) & LISTA DE DESPACHO ---
+                    const currentAlertSig = `${activeHighlightOrder.id}:${activeHighlightOrder.count}`;
+                    if (modalEl.getAttribute('data-showing-id') !== currentAlertSig || modalEl.style.display === 'none') {
+                        modalEl.setAttribute('data-showing-id', currentAlertSig);
+                        modalEl.setAttribute('data-is-rotation', 'false');
+                        modalEl.className = 'new-order-modal';
+                        modalEl.style.borderColor = activeHighlightOrder.color;
+                        modalEl.style.boxShadow = `0 0 0 40px #000000, 0 20px 60px ${activeHighlightOrder.color}88`;
 
-                    const aType = activeHighlightOrder.type;
-                    let msg = '';
-                    if (aType === 'DISPATCH') msg = 'Acesse o OMS &rarr; Lista de Despacho e realize a expedição dos pedidos conferidos antes de iniciar novas separações.';
-                    else msg = `Há ${activeHighlightOrder.count} pedido(s) esperando aceite no portal que não integraram no OMS. Aceite-os manualmente.`;
+                        const isDeliveryAlert = activeHighlightOrder.type !== 'DISPATCH';
+                        const badgeText = isDeliveryAlert ? 'DELIVERY • PRIORIDADE MÁXIMA' : 'ALERTA OPERACIONAL';
 
-                    modalEl.innerHTML = `
-                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; width: 100%; background: radial-gradient(circle, rgba(20,10,10,0.95) 0%, rgba(10,0,0,0.95) 100%); border-radius: 12px; border: 5px solid ${activeHighlightOrder.color}; animation: pulseRedGlow 1.5s infinite; text-align: center; padding: 40px; box-sizing: border-box;">
-                        <div style="font-size: 120px; animation: heartbeat 1s infinite; margin-bottom: 20px;">🚨</div>
-                        <div style="font-size: 80px; font-weight: 900; color: ${activeHighlightOrder.color}; text-transform: uppercase; line-height: 1; margin-bottom: 30px; text-shadow: 0 0 30px ${activeHighlightOrder.color};">
-                            ${activeHighlightOrder.title} PENDENTE!
+                        modalEl.innerHTML = `
+                        <div style="display: flex; flex-direction: column; height: 100%; width: 100%; background: #000000; font-family: var(--font-main); box-sizing: border-box;">
+                            <!-- Barra Superior da Marca / Canal -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: clamp(12px, 1.6vh, 18px) clamp(20px, 2.4vw, 32px); border-bottom: 4px solid ${activeHighlightOrder.color}; background: #000000; flex-shrink: 0;">
+                                <div style="display: flex; align-items: center; gap: 14px;">
+                                    <span style="background: ${activeHighlightOrder.color}; color: #000000; font-size: clamp(13px, 1.2vw, 18px); font-weight: 900; padding: 5px 14px; border-radius: 8px; letter-spacing: 0.1em; text-transform: uppercase;">${badgeText}</span>
+                                    <span style="font-size: clamp(22px, 2.4vw, 34px); font-weight: 900; color: ${activeHighlightOrder.color}; letter-spacing: 0.05em; text-transform: uppercase;">${activeHighlightOrder.brand}</span>
+                                </div>
+                                <button type="button" onclick="window.__omsDismissHighlight && window.__omsDismissHighlight()" aria-label="Fechar alerta (Tecla ESC)" style="background: #000000; border: 2px solid rgba(255,255,255,0.45); color: #ffffff; padding: 8px 16px; min-height: 44px; border-radius: 10px; font-family: var(--font-main); font-size: 14px; font-weight: 800; letter-spacing: 1px; cursor: pointer; text-transform: uppercase;">
+                                    ✕ ESC
+                                </button>
+                            </div>
+
+                            <!-- Corpo Central de Alto Impacto (Visível a 10 metros) -->
+                            <div style="flex: 1; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.65fr); align-items: center; gap: clamp(24px, 3.5vw, 50px); padding: clamp(24px, 4vmin, 54px);">
+                                <div style="display: flex; flex-direction: column; gap: clamp(12px, 2vh, 22px);">
+                                    <div style="font-size: clamp(64px, 8vmin, 110px); line-height: 1; animation: heartbeat 1.2s infinite;">${activeHighlightOrder.icon}</div>
+                                    <div style="font-size: clamp(38px, 4.8vw, 76px); font-weight: 900; color: ${activeHighlightOrder.color}; text-transform: uppercase; line-height: 1.02; letter-spacing: -0.01em;">
+                                        ${activeHighlightOrder.title}
+                                    </div>
+                                    <div style="font-size: clamp(20px, 2vw, 32px); color: #ffffff; font-weight: 700; line-height: 1.35; max-width: 92%;">
+                                        ${activeHighlightOrder.subtitle}
+                                    </div>
+                                </div>
+
+                                <div style="background: #000000; border: 5px solid ${activeHighlightOrder.color}; border-radius: 26px; padding: clamp(24px, 4vmin, 48px) clamp(20px, 2.5vw, 36px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; box-shadow: 0 0 40px ${activeHighlightOrder.color}44;">
+                                    <span style="font-size: clamp(14px, 1.3vw, 20px); color: ${activeHighlightOrder.color}; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px;">PENDENTES</span>
+                                    <span class="num-tabular" style="font-size: clamp(90px, 11vw, 170px); font-weight: 800; color: #ffffff; line-height: 0.95;">${activeHighlightOrder.count}</span>
+                                </div>
+                            </div>
                         </div>
-                        <div style="font-size: 32px; color: #fff; font-weight: 700; max-width: 80%; line-height: 1.4; margin-bottom: 50px;">
-                            ${msg}
-                        </div>
-                        <div style="background: ${activeHighlightOrder.color}20; border: 3px solid ${activeHighlightOrder.color}; padding: 20px 60px; border-radius: 20px;">
-                            <div style="font-size: 24px; color: rgba(255,255,255,0.7); text-transform: uppercase; font-weight: 900; margin-bottom: 10px;">QUANTIDADE PENDENTE</div>
-                            <div style="font-size: 100px; color: #fff; font-weight: 900; line-height: 1; text-shadow: 0 0 20px ${activeHighlightOrder.color};">${activeHighlightOrder.count}</div>
-                        </div>
-                    </div>
-                    `;
-                    modalEl.style.display = 'block';
+                        `;
+                        modalEl.style.display = 'block';
+                    }
 
                 } else {
                     // --- RENDERIZA O DESTAQUE WIDESCREEN DE SEPARAÇÃO (FOCO TOTAL EM IMAGEM, CÓDIGO, QTD E TIPO/PRIORIDADE) ---
@@ -2806,42 +2995,66 @@
 
             let emptyStateHtml = '';
             if (isListEmpty) {
-                const ifoodAguardando = parseInt(GM_getValue('ifoodAguardandoColeta', 0), 10);
-                const rappiAguardando = parseInt(GM_getValue('rappiAguardandoColeta', 0), 10);
+                const renderChannelRow = (icon, name, color, isOnline, isLogged, extraText) => {
+                    const statusLabel = !isOnline ? 'INATIVO' : (isLogged ? 'ONLINE' : 'DESLOGADO');
+                    const statusColor = !isOnline ? '#777777' : (isLogged ? '#00ff66' : '#ff1744');
+                    const pulseStyle = (isOnline && !isLogged) ? 'animation: pulseRedGlow 1.2s infinite;' : '';
+                    return `
+                        <div style="background: #000000; border: 2.5px solid ${isOnline ? (isLogged ? color : '#ff1744') : 'rgba(255,255,255,0.18)'}; padding: clamp(10px, 1.4vh, 16px) clamp(14px, 1.8vw, 22px); border-radius: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; ${pulseStyle}">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="font-size: clamp(22px, 2vw, 30px); line-height: 1;">${icon}</span>
+                                <span style="font-size: clamp(18px, 1.6vw, 24px); font-weight: 900; color: ${isOnline ? '#ffffff' : 'rgba(255,255,255,0.5)'}; letter-spacing: 0.03em;">${name}</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                ${extraText ? `<span class="num-tabular" style="font-size: 14px; font-weight: 700; color: rgba(255,255,255,0.55);">${extraText}</span>` : ''}
+                                <span style="background: #000000; border: 2px solid ${statusColor}; color: ${statusColor}; font-size: clamp(12px, 1vw, 14px); font-weight: 900; padding: 3px 10px; border-radius: 8px; letter-spacing: 0.08em;">${statusLabel}</span>
+                            </div>
+                        </div>
+                    `;
+                };
+
+                const activeStoreCode = getDynamicStoreId() || LOJA_ID;
+                const pingLabel = lastPingMs > 0 ? `${lastPingMs}ms` : '';
+
                 emptyStateHtml = `
-                    <div style="display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr); height: 100%; width: 100%; background: #000000; overflow: hidden; font-family: var(--font-main); align-items: center; gap: clamp(20px, 3.5vw, 50px); padding: clamp(16px, 3vmin, 40px);">
+                    <div style="display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr); height: 100%; width: 100%; background: #000000; overflow: hidden; font-family: var(--font-main); align-items: center; gap: clamp(20px, 3.5vw, 50px); padding: clamp(16px, 3vmin, 40px);">
 
                         <!-- Lado Esquerdo: Relógio Gigante Fluido em Alto Contraste -->
-                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: clamp(16px, 2.5vmin, 40px); border-right: 3px solid rgba(255,255,255,0.15); height: 80%;">
-                            <div class="tv-clock num-tabular" style="font-size: clamp(90px, 14vw, 220px); font-weight: 800; color: #ffffff; line-height: 1; letter-spacing: -0.02em;">${clockTime}</div>
-                            <div style="font-size: clamp(20px, 2.5vw, 42px); color: #00e5ff; font-weight: 800; margin-top: 18px; text-transform: uppercase; letter-spacing: 0.08em; text-align: center;">${clockDate}</div>
+                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: clamp(16px, 2.5vmin, 40px); border-right: 3px solid rgba(255,255,255,0.15); height: 82%;">
+                            <div style="font-size: clamp(14px, 1.2vw, 18px); color: #00ff66; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 14px;">
+                                HUB DE SEPARAÇÃO • FILIAL ${activeStoreCode}
+                            </div>
+                            <div class="tv-clock num-tabular" style="font-size: clamp(92px, 14.5vw, 226px); font-weight: 800; color: #ffffff; line-height: 1; letter-spacing: -0.02em;">${clockTime}</div>
+                            <div style="font-size: clamp(20px, 2.4vw, 40px); color: #00e5ff; font-weight: 800; margin-top: 18px; text-transform: uppercase; letter-spacing: 0.08em; text-align: center;">${clockDate}</div>
                         </div>
 
-                        <!-- Lado Direito: Monitor de Coleta Fluido em Alto Contraste -->
-                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: clamp(12px, 2vmin, 30px);">
+                        <!-- Lado Direito: Saúde dos 4 Canais do Hub + Fluxo Faturamento/Conferência -->
+                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: clamp(10px, 2vmin, 24px);">
 
-                            <div style="text-align: center; background: #000000; border: 3px solid rgba(255, 255, 255, 0.35); padding: clamp(20px, 3vmin, 32px); border-radius: 24px; width: 100%; max-width: 520px;">
-                                <div style="font-size: clamp(20px, 2vw, 28px); color: #ffea00; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: clamp(16px, 2.5vh, 26px);">
-                                    🛵 Aguardando Coleta
+                            <div style="background: #000000; border: 3px solid rgba(255, 255, 255, 0.28); padding: clamp(18px, 2.6vmin, 28px); border-radius: 22px; width: 100%; max-width: 540px; display: flex; flex-direction: column; gap: clamp(10px, 1.5vh, 16px);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid rgba(255,255,255,0.14); padding-bottom: 10px;">
+                                    <span style="font-size: clamp(16px, 1.5vw, 22px); color: #ffea00; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08em;">
+                                        📡 STATUS DOS CANAIS
+                                    </span>
+                                    <span style="font-size: 13px; color: rgba(255,255,255,0.55); font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;">AO VIVO</span>
                                 </div>
 
-                                <div style="display: flex; flex-direction: column; gap: clamp(14px, 2vh, 22px);">
-                                    <!-- iFood -->
-                                    <div style="background: #000000; border: 3px solid #ff1744; padding: clamp(14px, 2vh, 20px) clamp(18px, 2vw, 24px); border-radius: 16px; display: flex; justify-content: space-between; align-items: center; ${ifoodAguardando > 0 ? 'animation: pulseRedGlow 1.5s infinite;' : ''}">
-                                        <div style="display: flex; align-items: center; gap: 14px;">
-                                            <span style="font-size: clamp(28px, 2.5vw, 38px);">🔴</span>
-                                            <span style="font-size: clamp(22px, 2.2vw, 32px); font-weight: 900; color: #ff1744;">iFood</span>
-                                        </div>
-                                        <span class="num-tabular" style="font-size: clamp(36px, 3.6vw, 54px); font-weight: 800; color: #ffffff; line-height: 1;">${ifoodAguardando}</span>
-                                    </div>
+                                <div style="display: flex; flex-direction: column; gap: clamp(8px, 1.2vh, 12px);">
+                                    ${renderChannelRow('🏪', 'Linx OMS', '#00e5ff', true, true, pingLabel)}
+                                    ${renderChannelRow('🛵', 'iFood Separador', '#ff1744', isIfoodAlive, ifoodLogged, '')}
+                                    ${renderChannelRow('🟠', 'Rappi Gestor', '#ff6d00', isRappiAlive, rappiLogged, '')}
+                                    ${renderChannelRow('🚕', '99 Entrega', '#ffea00', is99Alive, n99Logged, '')}
+                                </div>
 
-                                    <!-- Rappi -->
-                                    <div style="background: #000000; border: 3px solid #ff6d00; padding: clamp(14px, 2vh, 20px) clamp(18px, 2vw, 24px); border-radius: 16px; display: flex; justify-content: space-between; align-items: center; ${rappiAguardando > 0 ? 'animation: pulseYellowGlow 1.5s infinite;' : ''}">
-                                        <div style="display: flex; align-items: center; gap: 14px;">
-                                            <span style="font-size: clamp(28px, 2.5vw, 38px);">🟠</span>
-                                            <span style="font-size: clamp(22px, 2.2vw, 32px); font-weight: 900; color: #ff6d00;">Rappi</span>
-                                        </div>
-                                        <span class="num-tabular" style="font-size: clamp(36px, 3.6vw, 54px); font-weight: 800; color: #ffffff; line-height: 1;">${rappiAguardando}</span>
+                                <!-- Resumo útil de etapas pós-separação (sem requisições extras) -->
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 4px; padding-top: 12px; border-top: 2px solid rgba(255,255,255,0.14);">
+                                    <div style="background: #000000; border: 2px solid ${counts.INVOICING > 0 ? '#00e5ff' : 'rgba(255,255,255,0.2)'}; border-radius: 12px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 13px; font-weight: 900; color: #00e5ff; letter-spacing: 0.08em;">FATURANDO</span>
+                                        <span class="num-tabular" style="font-size: 28px; font-weight: 800; color: #ffffff; line-height: 1;">${counts.INVOICING}</span>
+                                    </div>
+                                    <div style="background: #000000; border: 2px solid ${counts.CHECKED > 0 ? '#ff9100' : 'rgba(255,255,255,0.2)'}; border-radius: 12px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 13px; font-weight: 900; color: #ff9100; letter-spacing: 0.08em;">CONFERIDOS</span>
+                                        <span class="num-tabular" style="font-size: 28px; font-weight: 800; color: #ffffff; line-height: 1;">${counts.CHECKED}</span>
                                     </div>
                                 </div>
                             </div>
@@ -2857,8 +3070,8 @@
                 counts,
                 ifood: isIfoodAlive ? ifoodPending : 0,
                 rappi: isRappiAlive ? rappiPending : 0,
-                ifoodCol: isListEmpty ? parseInt(GM_getValue('ifoodAguardandoColeta', 0), 10) : 0,
-                rappiCol: isListEmpty ? parseInt(GM_getValue('rappiAguardandoColeta', 0), 10) : 0,
+                n99: is99Alive ? n99Pending : 0,
+                hubStatus: isListEmpty ? `${isIfoodAlive}:${ifoodLogged}|${isRappiAlive}:${rappiLogged}|${is99Alive}:${n99Logged}` : '',
                 ret: retiradas.map(o => `${o.id}:${o.statusNativo}:${(o.items || []).length}`),
                 ent: entregas.map(o => `${o.id}:${o.statusNativo}:${(o.items || []).length}`)
             });
@@ -2867,10 +3080,11 @@
                 lastDashboardSignature = dashboardSig;
                 tvDashboard.innerHTML = `
                 ${isListEmpty ? emptyStateHtml : `
-                    ${(ifoodAlertHtml || rappiAlertHtml) ? `
+                    ${(ifoodAlertHtml || rappiAlertHtml || n99AlertHtml) ? `
                     <div style="flex-shrink: 0;">
                         ${ifoodAlertHtml}
                         ${rappiAlertHtml}
+                        ${n99AlertHtml}
                     </div>` : ''}
 
                     <!-- Top Header Consolidado Fluido -->
@@ -2930,9 +3144,9 @@
                         </section>
 
                         <!-- Coluna Direita: Entregas -->
-                        <section class="tv-column tv-column-right" aria-label="Pedidos ShipFrom, iFood e Rappi">
+                        <section class="tv-column tv-column-right" aria-label="Pedidos ShipFrom, iFood, Rappi e 99">
                             <div class="tv-column-header tv-header-blue" style="padding: clamp(8px, 1.2vh, 13px) clamp(14px, 1.6vw, 20px); margin-bottom: 10px; background: #000000; border: 3px solid var(--neon-blue); color: var(--neon-blue);">
-                                <h2 class="tv-column-title" style="margin: 0; font-size: clamp(18px, 1.8vw, 25px); font-weight: 900; letter-spacing: 0.04em;"><span style="font-size: clamp(20px, 2vw, 28px);" aria-hidden="true">🚚</span> SHIPFROM - IFOOD - RAPPI</h2>
+                                <h2 class="tv-column-title" style="margin: 0; font-size: clamp(18px, 1.8vw, 25px); font-weight: 900; letter-spacing: 0.04em;"><span style="font-size: clamp(20px, 2vw, 28px);" aria-hidden="true">🚚</span> SHIPFROM • IFOOD • RAPPI • 99</h2>
                                 <span class="tv-column-counter num-tabular" style="background:#000000; color:#ffffff; font-size: clamp(22px, 2.2vw, 34px); padding: 2px 16px; border-radius: 10px; border: 3px solid var(--neon-blue);">${entregas.length}</span>
                             </div>
                             <div class="tv-orders-list" id="tv-list-entregas">
@@ -3001,6 +3215,12 @@
                 }
                 lastRappiAnnouncedCount = currentRappiCount;
 
+                const current99Count = is99Alive ? n99Pending : 0;
+                if (current99Count > last99AnnouncedCount) {
+                    hasBrandNewOrder = true;
+                }
+                last99AnnouncedCount = current99Count;
+
                 if (counts.SEND_READY > lastDispatchAnnouncedCount) {
                     hasBrandNewOrder = true;
                 }
@@ -3008,7 +3228,7 @@
 
                 const now = Date.now();
                 const hasDispatchAlert = counts.SEND_READY > 0;
-                const hasUnpickedOrders = (pedidosNovosWaiting.length > 0 || currentIfoodCount > 0 || currentRappiCount > 0);
+                const hasUnpickedOrders = (pedidosNovosWaiting.length > 0 || currentIfoodCount > 0 || currentRappiCount > 0 || current99Count > 0);
 
                 // 1. Novo Pedido (WAITING), Novo iFood/Rappi ou Nova Lista de Despacho -> Toca Sirene Imediatamente
                 if (hasBrandNewOrder) {
