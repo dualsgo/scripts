@@ -18,9 +18,12 @@
 // @match        https://*.didiglobal.com/*
 // @match        https://*.didi-food.com/*
 // @match        https://didi-food.com/*
+// @match        *://didi-food.com/*
+// @match        *://*.didi-food.com/*
 // @connect      linxoms.com.br
 // @connect      rihappy.com.br
 // @connect      separador.ifood.com.br
+// @connect      services.rappi.com.br
 // @connect      b.didi-food.com
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -349,10 +352,16 @@
     }
 
     // =========================================================================
-    // 2. MÓDULO DE MONITORAMENTO & COLETA RAPPI (SEGUNDO PLANO)
+    // 2. MÓDULO DE MONITORAMENTO & COLETA RAPPI (API CMS/ORDERS/ACTIVE + INTERCEPTAÇÃO PASSIVA + FALLBACK DOM)
     // =========================================================================
     if (isRappi) {
         let rappiModalElement = null;
+        let capturedRappiToken = '';
+        let capturedRappiStoreIds = [];
+        let rappiApiCount = 0;
+        let rappiApiActive = false;
+        let rappiLoggedInFromApi = true;
+        let isFetchingRappi = false;
 
         function updateRappiModal(count) {
             if (!rappiModalElement) {
@@ -373,39 +382,162 @@
             }
         }
 
-        function pollRappi() {
-            let isLoggedIn = true;
-            let newOrdersCount = 0;
-            let aguardandoColetaCount = 0;
+        function syncRappiToHub(count, loggedIn) {
+            updateRappiModal(count);
+            GM_setValue('rappiPendingOrders', count);
+            GM_setValue('rappiAguardandoColeta', 0);
+            GM_setValue('rappiLastUpdate', Date.now());
+            GM_setValue('rappiLoggedIn', loggedIn);
+        }
+
+        function handleRappiResponse(url, status, json) {
+            if (!url) return;
+            if (status === 401 || status === 403) {
+                rappiLoggedInFromApi = false;
+                syncRappiToHub(0, false);
+                return;
+            }
+            if (!json || typeof json !== 'object') return;
+            try {
+                // Captura lista de store_ids de /cms/user/stores
+                if (url.includes('/cms/user/stores') && Array.isArray(json)) {
+                    const ids = json.map(s => s && s.id).filter(Boolean);
+                    if (ids.length > 0) capturedRappiStoreIds = ids;
+                    rappiLoggedInFromApi = true;
+                }
+                // Captura totalElements de /cms/orders/active?viewMode=now
+                if (url.includes('/cms/orders/active') && (url.includes('viewMode=now') || !url.includes('viewMode='))) {
+                    rappiApiActive = true;
+                    rappiLoggedInFromApi = true;
+                    const count = typeof json.totalElements === 'number'
+                        ? json.totalElements
+                        : (Array.isArray(json.data) ? json.data.length : 0);
+                    rappiApiCount = count;
+                    syncRappiToHub(count, true);
+                }
+            } catch (e) { }
+        }
+
+        // Hook passivo XHR (Angular HttpClient do MiTienda Rappi usa XHR)
+        try {
+            const origXhrOpen = XMLHttpRequest.prototype.open;
+            const origXhrSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+            const origXhrSend = XMLHttpRequest.prototype.send;
+
+            XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+                this._omsRappiUrl = typeof url === 'string' ? url : String(url || '');
+                return origXhrOpen.call(this, method, url, ...rest);
+            };
+            XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+                try {
+                    const low = String(name || '').toLowerCase();
+                    if ((low === 'access_token' || low === 'authorization') && value) {
+                        capturedRappiToken = String(value);
+                    }
+                } catch (e) { }
+                return origXhrSetHeader.call(this, name, value);
+            };
+            XMLHttpRequest.prototype.send = function (body) {
+                try {
+                    const u = this._omsRappiUrl || '';
+                    if (u.includes('/cms/orders/active') && typeof body === 'string') {
+                        const parsedBody = JSON.parse(body);
+                        if (parsedBody && Array.isArray(parsedBody.store_ids) && parsedBody.store_ids.length > 0) {
+                            capturedRappiStoreIds = parsedBody.store_ids;
+                        }
+                    }
+                } catch (e) { }
+                this.addEventListener('load', function () {
+                    try {
+                        const u = this._omsRappiUrl || '';
+                        if (u.includes('services.rappi.com.br/api/ecom-partners/cms/')) {
+                            const parsed = this.responseText ? JSON.parse(this.responseText) : null;
+                            handleRappiResponse(u, this.status, parsed);
+                        }
+                    } catch (e) { }
+                });
+                return origXhrSend.apply(this, arguments);
+            };
+        } catch (e) { }
+
+        async function pollRappi() {
+            if (isFetchingRappi) return;
+            isFetchingRappi = true;
+
+            let isLoggedIn = !document.querySelector('input[type="password"]') && rappiLoggedInFromApi;
+            let newOrdersCount = rappiApiActive ? rappiApiCount : 0;
 
             try {
-                if (document.querySelector('input[type="password"]')) {
-                    isLoggedIn = false;
-                } else {
+                // 1. Se já capturamos access_token + store_ids, consulta leve direta na API /cms/orders/active?viewMode=now
+                if (isLoggedIn && capturedRappiToken && capturedRappiStoreIds.length > 0) {
+                    const headers = {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    };
+                    if (capturedRappiToken.toLowerCase().startsWith('bearer ')) {
+                        headers['Authorization'] = capturedRappiToken;
+                    } else {
+                        headers['access_token'] = capturedRappiToken;
+                    }
+
+                    const res = await fetch('https://services.rappi.com.br/api/ecom-partners/cms/orders/active?viewMode=now', {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({
+                            store_ids: capturedRappiStoreIds,
+                            page: 1,
+                            per_page: 8,
+                            days: 10,
+                            mode: 'delivery',
+                            sort_type: 'desc',
+                            sort_by: 'created_at',
+                            state: 'now'
+                        })
+                    });
+
+                    if (res.status === 401 || res.status === 403) {
+                        isLoggedIn = false;
+                        rappiLoggedInFromApi = false;
+                        newOrdersCount = 0;
+                    } else if (res.ok) {
+                        const json = await res.json();
+                        rappiApiActive = true;
+                        rappiLoggedInFromApi = true;
+                        newOrdersCount = typeof json.totalElements === 'number'
+                            ? json.totalElements
+                            : (Array.isArray(json.data) ? json.data.length : 0);
+                        rappiApiCount = newOrdersCount;
+                    }
+                } else if (isLoggedIn && !rappiApiActive) {
+                    // 2. Fallback DOM leve antes da primeira chamada da API
                     const cards = document.querySelectorAll('app-kind-order .order-card, app-kind-order .order-item, app-order-card, .order-card-container');
                     newOrdersCount = cards.length;
                 }
-                updateRappiModal(newOrdersCount);
             } catch (e) {
                 console.error("[OMNI MONITOR] Erro no coletor Rappi:", e);
+            } finally {
+                syncRappiToHub(newOrdersCount, isLoggedIn);
+                isFetchingRappi = false;
             }
-
-            GM_setValue('rappiPendingOrders', newOrdersCount);
-            GM_setValue('rappiAguardandoColeta', aguardandoColetaCount);
-            GM_setValue('rappiLastUpdate', Date.now());
-            GM_setValue('rappiLoggedIn', isLoggedIn);
         }
 
-        const rappiWorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 5000);`], { type: 'application/javascript' });
+        let rappiFallbackStarted = false;
+        const startRappiFallback = () => {
+            if (rappiFallbackStarted) return;
+            rappiFallbackStarted = true;
+            setInterval(pollRappi, 10000);
+        };
+        const rappiWorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 10000);`], { type: 'application/javascript' });
         try {
             const rappiWorker = new Worker(URL.createObjectURL(rappiWorkerBlob));
             rappiWorker.onmessage = (e) => { if (e.data === 'tick') pollRappi(); };
+            rappiWorker.onerror = () => startRappiFallback();
         } catch (e) {
-            setInterval(pollRappi, 5000);
+            startRappiFallback();
         }
-        setTimeout(pollRappi, 1500);
+        setTimeout(pollRappi, 2000);
 
-        console.log("[OMNI MONITOR] Coletor Rappi ativo em segundo plano.");
+        console.log("[OMNI MONITOR] Coletor Rappi (API + XHR Hook) ativo em segundo plano.");
         return;
     }
 
@@ -605,12 +737,19 @@
             sync99StateToHub();
         }
 
+        let n99FallbackStarted = false;
+        const start99Fallback = () => {
+            if (n99FallbackStarted) return;
+            n99FallbackStarted = true;
+            setInterval(poll99Heartbeat, 8000);
+        };
         const n99WorkerBlob = new Blob([`setInterval(() => postMessage('tick'), 8000);`], { type: 'application/javascript' });
         try {
             const n99Worker = new Worker(URL.createObjectURL(n99WorkerBlob));
             n99Worker.onmessage = (e) => { if (e.data === 'tick') poll99Heartbeat(); };
+            n99Worker.onerror = () => start99Fallback();
         } catch (e) {
-            setInterval(poll99Heartbeat, 8000);
+            start99Fallback();
         }
         setTimeout(poll99Heartbeat, 1500);
 
