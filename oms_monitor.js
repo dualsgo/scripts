@@ -117,6 +117,90 @@
         return el;
     }
 
+    // Ponte Cross-Browser (Firefox Ubuntu Xray-Safe + Chrome) para interceptar Fetch/XHR no contexto real da página
+    function installPageNetworkBridge(urlSubstrings, onNetEvent) {
+        const eventName = 'oms-hub-net-' + Math.random().toString(36).slice(2, 9);
+        window.addEventListener(eventName, (ev) => {
+            try {
+                if (ev && typeof ev.detail === 'string') {
+                    onNetEvent(JSON.parse(ev.detail));
+                }
+            } catch (e) { }
+        });
+
+        const script = document.createElement('script');
+        script.textContent = `
+        (function() {
+            const filters = ${JSON.stringify(urlSubstrings)};
+            const evtName = ${JSON.stringify(eventName)};
+            const matches = (u) => typeof u === 'string' && filters.some(f => u.includes(f));
+            const emit = (payload) => {
+                try { window.dispatchEvent(new CustomEvent(evtName, { detail: JSON.stringify(payload) })); } catch (e) {}
+            };
+
+            try {
+                const origFetch = window.fetch;
+                window.fetch = function(...args) {
+                    const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
+                    const reqInit = args[1] || {};
+                    const reqHeaders = {};
+                    try {
+                        const h = reqInit.headers || (args[0] && args[0].headers);
+                        if (h) {
+                            if (typeof h.forEach === 'function') h.forEach((v, k) => { reqHeaders[k.toLowerCase()] = v; });
+                            else if (typeof h === 'object') Object.keys(h).forEach(k => { reqHeaders[k.toLowerCase()] = h[k]; });
+                        }
+                    } catch (e) {}
+                    if (matches(reqUrl)) {
+                        emit({ kind: 'req', url: reqUrl, headers: reqHeaders, body: typeof reqInit.body === 'string' ? reqInit.body : '' });
+                    }
+                    return origFetch.apply(this, args).then(res => {
+                        if (matches(reqUrl)) {
+                            res.clone().text().then(txt => {
+                                let json = null;
+                                try { json = JSON.parse(txt); } catch (e) {}
+                                emit({ kind: 'res', url: reqUrl, status: res.status, json });
+                            }).catch(() => {});
+                        }
+                        return res;
+                    });
+                };
+            } catch (e) {}
+
+            try {
+                const origOpen = XMLHttpRequest.prototype.open;
+                const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+                const origSend = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                    this._omsUrl = typeof url === 'string' ? url : String(url || '');
+                    this._omsHeaders = {};
+                    return origOpen.call(this, method, url, ...rest);
+                };
+                XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+                    try { if (this._omsHeaders) this._omsHeaders[String(name || '').toLowerCase()] = String(value || ''); } catch (e) {}
+                    return origSetHeader.call(this, name, value);
+                };
+                XMLHttpRequest.prototype.send = function(body) {
+                    const u = this._omsUrl || '';
+                    if (matches(u)) {
+                        emit({ kind: 'req', url: u, headers: this._omsHeaders || {}, body: typeof body === 'string' ? body : '' });
+                    }
+                    this.addEventListener('load', function() {
+                        if (matches(u)) {
+                            let json = null;
+                            try { if (this.responseText) json = JSON.parse(this.responseText); } catch (e) {}
+                            emit({ kind: 'res', url: u, status: this.status, json });
+                        }
+                    });
+                    return origSend.apply(this, arguments);
+                };
+            } catch (e) {}
+        })();
+        `;
+        (document.head || document.documentElement).appendChild(script);
+        script.remove();
+    }
+
     // =========================================================================
     // 1. MÓDULO DE MONITORAMENTO & COLETA IFOOD (BFF API OTIMIZADA + FALLBACK DOM)
     // =========================================================================
@@ -127,30 +211,13 @@
         let isFetchingIfood = false;
         const ifoodOrderDetailCache = new Map(); // Cache O(1) de detalhes por orderId (evita re-fetch repetido)
 
-        // Interceptação passiva do window.fetch para capturar Bearer token e x-selected-stores sem sobrecarga
-        try {
-            const origFetch = window.fetch;
-            window.fetch = function (...args) {
-                try {
-                    const reqInit = args[1] || {};
-                    const headers = reqInit.headers || (args[0] && args[0].headers);
-                    if (headers) {
-                        if (typeof headers.get === 'function') {
-                            const auth = headers.get('authorization') || headers.get('Authorization');
-                            const stores = headers.get('x-selected-stores');
-                            if (auth) capturedAuthHeader = auth;
-                            if (stores) capturedSelectedStores = stores;
-                        } else if (typeof headers === 'object') {
-                            const auth = headers.Authorization || headers.authorization;
-                            const stores = headers['x-selected-stores'] || headers['X-Selected-Stores'];
-                            if (auth) capturedAuthHeader = auth;
-                            if (stores) capturedSelectedStores = stores;
-                        }
-                    }
-                } catch (e) { }
-                return origFetch.apply(this, args);
-            };
-        } catch (e) { }
+        // Interceptação passiva via Ponte Cross-Browser (Firefox Ubuntu + Chrome) para capturar Bearer token e x-selected-stores
+        installPageNetworkBridge(['/bff/'], (ev) => {
+            if (ev.kind === 'req' && ev.headers) {
+                if (ev.headers['authorization']) capturedAuthHeader = ev.headers['authorization'];
+                if (ev.headers['x-selected-stores']) capturedSelectedStores = ev.headers['x-selected-stores'];
+            }
+        });
 
         function getCookieVal(name) {
             try {
@@ -418,47 +485,25 @@
             } catch (e) { }
         }
 
-        // Hook passivo XHR (Angular HttpClient do MiTienda Rappi usa XHR)
-        try {
-            const origXhrOpen = XMLHttpRequest.prototype.open;
-            const origXhrSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-            const origXhrSend = XMLHttpRequest.prototype.send;
-
-            XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-                this._omsRappiUrl = typeof url === 'string' ? url : String(url || '');
-                return origXhrOpen.call(this, method, url, ...rest);
-            };
-            XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-                try {
-                    const low = String(name || '').toLowerCase();
-                    if ((low === 'access_token' || low === 'authorization') && value) {
-                        capturedRappiToken = String(value);
-                    }
-                } catch (e) { }
-                return origXhrSetHeader.call(this, name, value);
-            };
-            XMLHttpRequest.prototype.send = function (body) {
-                try {
-                    const u = this._omsRappiUrl || '';
-                    if (u.includes('/cms/orders/active') && typeof body === 'string') {
-                        const parsedBody = JSON.parse(body);
+        // Hook passivo via Ponte Cross-Browser (Firefox Ubuntu + Chrome) para capturar XHR/Fetch do MiTienda Rappi
+        installPageNetworkBridge(['services.rappi.com.br/api/ecom-partners/cms/'], (ev) => {
+            if (ev.kind === 'req') {
+                if (ev.headers) {
+                    const tok = ev.headers['access_token'] || ev.headers['authorization'];
+                    if (tok) capturedRappiToken = String(tok);
+                }
+                if (ev.url && ev.url.includes('/cms/orders/active') && ev.body) {
+                    try {
+                        const parsedBody = JSON.parse(ev.body);
                         if (parsedBody && Array.isArray(parsedBody.store_ids) && parsedBody.store_ids.length > 0) {
                             capturedRappiStoreIds = parsedBody.store_ids;
                         }
-                    }
-                } catch (e) { }
-                this.addEventListener('load', function () {
-                    try {
-                        const u = this._omsRappiUrl || '';
-                        if (u.includes('services.rappi.com.br/api/ecom-partners/cms/')) {
-                            const parsed = this.responseText ? JSON.parse(this.responseText) : null;
-                            handleRappiResponse(u, this.status, parsed);
-                        }
                     } catch (e) { }
-                });
-                return origXhrSend.apply(this, arguments);
-            };
-        } catch (e) { }
+                }
+            } else if (ev.kind === 'res') {
+                handleRappiResponse(ev.url, ev.status, ev.json);
+            }
+        });
 
         async function pollRappi() {
             if (isFetchingRappi) return;
@@ -676,45 +721,12 @@
             }
         }
 
-        // Hook passivo em XMLHttpRequest (DiDi usa XHR/Axios para chamadas b.didi-food.com)
-        try {
-            const origXhrOpen = XMLHttpRequest.prototype.open;
-            const origXhrSend = XMLHttpRequest.prototype.send;
-            XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-                this._omsDidiUrl = typeof url === 'string' ? url : String(url || '');
-                return origXhrOpen.call(this, method, url, ...rest);
-            };
-            XMLHttpRequest.prototype.send = function (...args) {
-                this.addEventListener('load', function () {
-                    try {
-                        const u = this._omsDidiUrl || '';
-                        if (u.includes('b.didi-food.com/order/') || u.includes('b.didi-food.com/push/') || u.includes('b.didi-food.com/shop/')) {
-                            if (this.responseText) {
-                                const parsed = JSON.parse(this.responseText);
-                                handleDidiApiResponse(u, parsed);
-                            }
-                        }
-                    } catch (e) { }
-                });
-                return origXhrSend.apply(this, args);
-            };
-        } catch (e) { }
-
-        // Hook passivo em window.fetch (garantia caso algum endpoint use fetch)
-        try {
-            const origDidiFetch = window.fetch;
-            window.fetch = function (...args) {
-                const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
-                return origDidiFetch.apply(this, args).then(res => {
-                    try {
-                        if (reqUrl.includes('b.didi-food.com/order/') || reqUrl.includes('b.didi-food.com/push/') || reqUrl.includes('b.didi-food.com/shop/')) {
-                            res.clone().json().then(json => handleDidiApiResponse(reqUrl, json)).catch(() => { });
-                        }
-                    } catch (e) { }
-                    return res;
-                });
-            };
-        } catch (e) { }
+        // Hook passivo via Ponte Cross-Browser (Firefox Ubuntu + Chrome) para XHR e Fetch da DiDi/99
+        installPageNetworkBridge(['b.didi-food.com/order/', 'b.didi-food.com/push/', 'b.didi-food.com/shop/'], (ev) => {
+            if (ev.kind === 'res' && ev.json) {
+                handleDidiApiResponse(ev.url, ev.json);
+            }
+        });
 
         // Heartbeat leve a cada 8s para manter o status "99: Online" vivo no Hub + fallback DOM se API ainda não disparou
         function poll99Heartbeat() {
