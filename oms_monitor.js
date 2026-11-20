@@ -4133,6 +4133,78 @@
             }
         }, 1000);
 
+        // --- AUTO-ROLAGEM SUAVE INDEPENDENTE PARA AS 2 COLUNAS DO HUB (RETIRADA | ENTREGAS) ---
+        const autoScrollState = {
+            'tv-list-retiradas': { pauseUntil: 0, atBottomPaused: false, lastTs: 0, boundEl: null },
+            'tv-list-entregas': { pauseUntil: 0, atBottomPaused: false, lastTs: 0, boundEl: null }
+        };
+        const AUTO_SCROLL_SPEED_PX_SEC = 38; // Velocidade suave e confortável para leitura à distância na TV
+
+        function bindManualPauseListeners(el, state) {
+            if (!el || state.boundEl === el) return;
+            state.boundEl = el;
+            const pauseManual = () => { state.pauseUntil = Date.now() + 6000; };
+            el.addEventListener('wheel', pauseManual, { passive: true });
+            el.addEventListener('touchstart', pauseManual, { passive: true });
+            el.addEventListener('mouseenter', () => { state.pauseUntil = Date.now() + 60000; });
+            el.addEventListener('mouseleave', () => { state.pauseUntil = Date.now() + 1500; });
+        }
+
+        function stepTvAutoScroll(nowTs) {
+            const modalEl = document.getElementById('oms-persistent-new-order-modal');
+            const isModalVisible = !!(modalEl && modalEl.style.display !== 'none');
+
+            if (currentViewMode === 'TV' && !document.hidden && !isModalVisible) {
+                const nowMs = Date.now();
+                ['tv-list-retiradas', 'tv-list-entregas'].forEach(colId => {
+                    const el = document.getElementById(colId);
+                    const st = autoScrollState[colId];
+                    if (!el) {
+                        st.lastTs = nowTs;
+                        return;
+                    }
+                    bindManualPauseListeners(el, st);
+
+                    const maxScroll = el.scrollHeight - el.clientHeight;
+                    if (maxScroll <= 18) {
+                        st.atBottomPaused = false;
+                        st.lastTs = nowTs;
+                        return;
+                    }
+
+                    if (nowMs < st.pauseUntil) {
+                        st.lastTs = nowTs;
+                        return;
+                    }
+
+                    // Se terminou a pausa no fim da lista, volta suavemente ao topo e pausa 4s antes de descer de novo
+                    if (st.atBottomPaused) {
+                        st.atBottomPaused = false;
+                        el.scrollTo({ top: 0, behavior: 'smooth' });
+                        st.pauseUntil = nowMs + 4000;
+                        st.lastTs = nowTs;
+                        return;
+                    }
+
+                    const dtSec = st.lastTs ? Math.min(0.1, (nowTs - st.lastTs) / 1000) : 0.016;
+                    st.lastTs = nowTs;
+
+                    if (el.scrollTop >= maxScroll - 2) {
+                        // Chegou no fim: pausa 3.5s para leitura dos últimos pedidos
+                        st.atBottomPaused = true;
+                        st.pauseUntil = nowMs + 3500;
+                    } else {
+                        el.scrollTop += AUTO_SCROLL_SPEED_PX_SEC * dtSec;
+                    }
+                });
+            } else {
+                autoScrollState['tv-list-retiradas'].lastTs = nowTs;
+                autoScrollState['tv-list-entregas'].lastTs = nowTs;
+            }
+            requestAnimationFrame(stepTvAutoScroll);
+        }
+        requestAnimationFrame(stepTvAutoScroll);
+
     } // Fim de initScriptCore
 
     // --- VERIFICAÇÃO POSITIVA DE AUTENTICAÇÃO NO LINX OMS ---
