@@ -367,10 +367,12 @@
                                         id: `IFOOD-${(detail && detail.code) || ord.code || ord.shortCode || ordId.slice(0, 6)}`,
                                         statusNativo: 'WAITING',
                                         createdAt: (detail && detail.createdAt) || ord.createdAt || new Date().toISOString(),
+                                        pickingDeadlineAt: (detail && (detail.pickingTimeLimit || detail.pickingStartLimit)) || ord.pickingTimeLimit || ord.pickingStartLimit || null,
                                         isExpress: true,
                                         isPickup: false,
                                         carrier: 'IFOOD EXPRESS',
                                         deliveryType: 'IFOOD',
+                                        shippingMethod: 'IFOOD',
                                         customerName: (detail && detail.customer && detail.customer.name) || 'App Separador iFood',
                                         items: flatItems
                                     });
@@ -2773,6 +2775,158 @@
             return null;
         }
 
+        // --- CLASSIFICAÇÃO DE PRIORIDADE OPERACIONAL (OMNI + DELIVERIES + ÍCONES NATIVOS LINX OMS) ---
+        // Ordem: iFood (<20m) > Deliveries (iFood/Rappi/99) > Super Expressa/Uber/Turbo/3h > Expressa > Same Day (Receba Hoje) > Retirada > Next Day/Normal
+        function getOrderPriority(o) {
+            const delivery = parseDeliveryInfo(o);
+            const idStr = String(o.id || '').toUpperCase();
+            const methodStr = `${o.shippingMethod || ''} ${o.freightMethodName || ''} ${o.carrier || ''} ${o.deliveryType || ''} ${delivery.label || ''}`.toLowerCase();
+
+            const isIfood = idStr.startsWith('IFOOD') || methodStr.includes('ifood');
+            const isRappi = idStr.startsWith('RAPPI') || methodStr.includes('rappi');
+            const is99 = idStr.startsWith('99-') || methodStr.includes('99 entrega') || methodStr.includes('99food');
+            const isPickup = !!(o.isPickup || delivery.isPickup);
+
+            // Tempo restante de separação do iFood (pickingTimeLimit / pickingStartLimit)
+            let pickingMinsLeft = null;
+            if (o.pickingDeadlineAt) {
+                const limitMs = new Date(o.pickingDeadlineAt).getTime();
+                if (!isNaN(limitMs)) {
+                    pickingMinsLeft = Math.ceil((limitMs - Date.now()) / 60000);
+                }
+            }
+
+            if (isIfood) {
+                const isUltraUrgent = pickingMinsLeft !== null && pickingMinsLeft <= 20;
+                const timeSuffix = pickingMinsLeft !== null
+                    ? (pickingMinsLeft <= 0 ? ' • ATRASADO!' : ` • ⏱️ ${pickingMinsLeft} MIN`)
+                    : '';
+                return {
+                    rank: isUltraUrgent ? 0 : 1,
+                    badge: isUltraUrgent ? 'URGENTE <20M' : 'DELIVERY',
+                    label: `🛵 IFOOD${timeSuffix}`,
+                    color: '#ff1744',
+                    glow: 'rgba(255, 23, 68, 0.55)',
+                    cardClass: 'tv-card-red',
+                    iconUrl: '',
+                    pickingMinsLeft
+                };
+            }
+            if (isRappi) {
+                return {
+                    rank: 1,
+                    badge: 'DELIVERY',
+                    label: '🟠 RAPPI EXPRESS',
+                    color: '#ff6d00',
+                    glow: 'rgba(255, 109, 0, 0.55)',
+                    cardClass: 'tv-card-red',
+                    iconUrl: '',
+                    pickingMinsLeft: null
+                };
+            }
+            if (is99) {
+                return {
+                    rank: 1,
+                    badge: 'DELIVERY',
+                    label: '🚕 99 ENTREGA',
+                    color: '#ffea00',
+                    glow: 'rgba(255, 234, 0, 0.55)',
+                    cardClass: 'tv-card-yellow',
+                    iconUrl: '',
+                    pickingMinsLeft: null
+                };
+            }
+
+            // 1. SUPER EXPRESSA / UBER / TURBO / ATÉ 3 HORAS
+            if (methodStr.includes('uber') || methodStr.includes('super express') || methodStr.includes('superexpress') || methodStr.includes('turbo') || methodStr.includes('3 horas') || methodStr.includes('3h')) {
+                const sub = methodStr.includes('uber') ? 'UBER • SUPER EXPRESSA' : (methodStr.includes('turbo') ? 'TURBO • SUPER EXPRESSA' : 'SUPER EXPRESSA (3H)');
+                return {
+                    rank: 2,
+                    badge: 'SUPER EXPRESSA',
+                    label: sub,
+                    color: '#ff1744',
+                    glow: 'rgba(255, 23, 68, 0.55)',
+                    cardClass: 'tv-card-red',
+                    iconUrl: '/images/ico-frete-superexpressa.png',
+                    pickingMinsLeft: null
+                };
+            }
+
+            // 2. EXPRESSA / RECEBA EM ATÉ 2 DIAS
+            if (methodStr.includes('expressa') || methodStr.includes('express') || methodStr.includes('2 dias') || methodStr.includes('2dias')) {
+                const carrierTag = (o.carrier && !o.carrier.toLowerCase().includes('express')) ? ` • ${o.carrier.toUpperCase()}` : '';
+                return {
+                    rank: 3,
+                    badge: 'EXPRESSA',
+                    label: `EXPRESSA${carrierTag}`,
+                    color: '#ff6d00',
+                    glow: 'rgba(255, 109, 0, 0.5)',
+                    cardClass: 'tv-card-orange',
+                    iconUrl: '/images/ico-frete-expressa.png',
+                    pickingMinsLeft: null
+                };
+            }
+
+            // 3. SAME DAY / RECEBA HOJE
+            if (methodStr.includes('receba hoje') || methodStr.includes('same day') || methodStr.includes('sameday')) {
+                return {
+                    rank: 4,
+                    badge: 'SAME DAY',
+                    label: 'RECEBA HOJE (SAME DAY)',
+                    color: '#ffea00',
+                    glow: 'rgba(255, 234, 0, 0.45)',
+                    cardClass: 'tv-card-yellow',
+                    iconUrl: '/images/ico-frete-superexpressa.png',
+                    pickingMinsLeft: null
+                };
+            }
+
+            // 4. RETIRADA EM LOJA
+            if (isPickup) {
+                return {
+                    rank: 5,
+                    badge: 'RETIRADA',
+                    label: 'RETIRADA EM LOJA',
+                    color: '#ffea00',
+                    glow: 'rgba(255, 234, 0, 0.45)',
+                    cardClass: 'tv-card-yellow',
+                    iconUrl: '/images/ico-retirada.png',
+                    pickingMinsLeft: null
+                };
+            }
+
+            // 5. NEXT DAY / SEDEX / ENTREGA PADRÃO / ECONÔMICA
+            let normalLabel = (o.shippingMethod || o.freightMethodName || o.carrier || 'ENTREGA NORMAL').toUpperCase();
+            if (normalLabel.length > 26) normalLabel = normalLabel.substring(0, 23) + '...';
+            const isNextDay = methodStr.includes('next day') || methodStr.includes('nextday') || methodStr.includes('amanhã') || methodStr.includes('amanha');
+            return {
+                rank: isNextDay ? 6 : 7,
+                badge: isNextDay ? 'NEXT DAY' : 'NORMAL',
+                label: normalLabel,
+                color: '#00e5ff',
+                glow: 'rgba(0, 229, 255, 0.45)',
+                cardClass: 'tv-card-blue',
+                iconUrl: '/images/ico-frete-normal.png',
+                pickingMinsLeft: null
+            };
+        }
+
+        function compareOrdersByPriority(a, b) {
+            // 1. WAITING (Novos) sempre acima de PICKING (Separando)
+            if (a.statusNativo === 'WAITING' && b.statusNativo !== 'WAITING') return -1;
+            if (a.statusNativo !== 'WAITING' && b.statusNativo === 'WAITING') return 1;
+
+            // 2. Menor rank de prioridade primeiro (iFood <20m > Delivery > Super Expressa/Uber > Expressa > Same Day > Retirada > Next Day)
+            const pA = getOrderPriority(a);
+            const pB = getOrderPriority(b);
+            if (pA.rank !== pB.rank) return pA.rank - pB.rank;
+
+            // 3. Desempate: prazo mais urgente / pedido mais antigo primeiro
+            const dA = new Date(a.pickingDeadlineAt || a.deadlineAt || a.createdAt || 0).getTime() || 0;
+            const dB = new Date(b.pickingDeadlineAt || b.deadlineAt || b.createdAt || 0).getTime() || 0;
+            return dA - dB;
+        }
+
         // --- RENDERIZAÇÃO DO LAYOUT EM TELA CHEIA (MODO TV) ---
         function renderTvView(list) {
             if (currentViewMode === 'NATIVE') {
@@ -2909,6 +3063,11 @@
                     }
                 }
             }
+
+            // Ordenar todas as filas pela prioridade operacional (iFood <20m > Delivery > Super Expressa/Uber > Expressa > Same Day > Retirada > Next Day)
+            retiradas.sort(compareOrdersByPriority);
+            entregas.sort(compareOrdersByPriority);
+            pedidosNovosWaiting.sort(compareOrdersByPriority);
 
             // Agrupamento para o topo (contadores de fluxo)
             const counts = { WAITING: 0, PICKING: 0, INVOICING: 0, CHECKED: 0, SEND_READY: 0 };
@@ -3153,54 +3312,14 @@
                     }
 
                 } else {
-                    // --- RENDERIZA O DESTAQUE WIDESCREEN DE SEPARAÇÃO (FOCO TOTAL EM IMAGEM, CÓDIGO, QTD E TIPO/PRIORIDADE) ---
-                    const deliveryInfo = parseDeliveryInfo(activeHighlightOrder);
-                    const orderSla = getSLAInfo(activeHighlightOrder.createdAt, activeHighlightOrder.isExpress);
-
-                    const labelStr = String(deliveryInfo.label).toUpperCase();
-                    const isIfood = labelStr.includes('IFOOD') || String(activeHighlightOrder.id || '').toUpperCase().startsWith('IFOOD');
-                    const isRappi = labelStr.includes('RAPPI') || String(activeHighlightOrder.id || '').toUpperCase().startsWith('RAPPI');
-                    const is99Ord = labelStr.includes('99') || String(activeHighlightOrder.id || '').toUpperCase().startsWith('99-');
-                    const isAtrasadoOrCritico = orderSla.urgency === 3 || activeHighlightOrder.isExpress || isIfood || isRappi || is99Ord;
-
-                    // Sistema de Cores por Prioridade:
-                    // 🔴 Vermelho (#ff1744): Prioridade Máxima (iFood, Rappi, Uber/Express ou SLA Crítico/Atrasado)
-                    // 🟡 Amarelo (#ffea00): Prioridade Alta (Retirada em Loja / 99 Entrega)
-                    // 🔵 Ciano (#00e5ff): Prioridade Normal (Entrega / Transportadora / ShipFrom)
-                    let themeColor = '#00e5ff';
-                    let themeGlow = 'rgba(0, 229, 255, 0.45)';
-                    let priorityTag = '🚚 ENTREGA / SHIPFROM';
-
-                    let rawCarrier = String(activeHighlightOrder.carrier || activeHighlightOrder.deliveryType || (deliveryInfo.isPickup ? 'RETIRADA EM LOJA' : 'ENTREGA')).toUpperCase();
-                    if (rawCarrier.length > 26) rawCarrier = rawCarrier.substring(0, 23) + '...';
-
-                    if (isIfood) {
-                        themeColor = '#ff1744';
-                        themeGlow = 'rgba(255, 23, 68, 0.55)';
-                        priorityTag = '🛵 IFOOD EXPRESS';
-                    } else if (isRappi) {
-                        themeColor = '#ff6d00';
-                        themeGlow = 'rgba(255, 109, 0, 0.55)';
-                        priorityTag = '🟠 RAPPI EXPRESS';
-                    } else if (is99Ord) {
-                        themeColor = '#ffea00';
-                        themeGlow = 'rgba(255, 234, 0, 0.55)';
-                        priorityTag = '🚕 99 ENTREGA';
-                    } else if (isAtrasadoOrCritico) {
-                        themeColor = '#ff1744';
-                        themeGlow = 'rgba(255, 23, 68, 0.55)';
-                        priorityTag = deliveryInfo.isPickup
-                            ? '🔥 URGENTE • 🏪 RETIRADA EM LOJA'
-                            : `🔥 URGENTE • 🚚 ${rawCarrier}`;
-                    } else if (deliveryInfo.isPickup) {
-                        themeColor = '#ffea00';
-                        themeGlow = 'rgba(255, 234, 0, 0.45)';
-                        priorityTag = '🏪 RETIRADA EM LOJA';
-                    } else {
-                        themeColor = '#00e5ff';
-                        themeGlow = 'rgba(0, 229, 255, 0.45)';
-                        priorityTag = `🚚 ${rawCarrier}`;
-                    }
+                    // --- RENDERIZA O DESTAQUE WIDESCREEN DE SEPARAÇÃO (CLASSIFICADO POR PRIORIDADE + ÍCONE NATIVO OMS) ---
+                    const priorityInfo = getOrderPriority(activeHighlightOrder);
+                    const themeColor = priorityInfo.color;
+                    const themeGlow = priorityInfo.glow;
+                    const modalIconHtml = priorityInfo.iconUrl
+                        ? `<img src="${priorityInfo.iconUrl}" alt="" style="height: clamp(24px, 2.6vw, 38px); width: auto; object-fit: contain; flex-shrink: 0; background: #ffffff; border-radius: 6px; padding: 3px;" onerror="this.style.display='none';" />`
+                        : '';
+                    const priorityTag = `${modalIconHtml}<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${priorityInfo.label}</span>`;
 
                     modalEl.style.borderColor = themeColor;
                     modalEl.style.boxShadow = `0 0 0 40px #000000, 0 20px 60px ${themeGlow}`;
@@ -3317,9 +3436,9 @@
                         <div style="display: flex; justify-content: space-between; align-items: center; padding: clamp(10px, 1.4vh, 16px) clamp(16px, 2.2vw, 28px); background: #000000; border-bottom: 4px solid ${themeColor}; flex-shrink: 0; gap: 14px; flex-wrap: nowrap;">
                             <div style="display: flex; align-items: center; gap: clamp(10px, 1.2vw, 16px); flex: 1; min-width: 0;">
                                 <span style="background: ${themeColor}; color: #000000; font-family: var(--font-main); font-size: clamp(13px, 1.2vw, 19px); font-weight: 900; padding: 5px 14px; border-radius: 8px; letter-spacing: 1.5px; text-transform: uppercase; flex-shrink: 0;">
-                                    ${isRotation ? 'PENDENTE' : 'NOVO'}
+                                    ${priorityInfo.badge}
                                 </span>
-                                <span style="font-family: var(--font-main); font-size: clamp(22px, 2.7vw, 44px); font-weight: 900; color: ${themeColor}; letter-spacing: 0.03em; text-transform: uppercase; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                <span style="display: flex; align-items: center; gap: 10px; font-family: var(--font-main); font-size: clamp(22px, 2.6vw, 42px); font-weight: 900; color: ${themeColor}; letter-spacing: 0.03em; text-transform: uppercase; line-height: 1.05; min-width: 0;">
                                     ${priorityTag}
                                 </span>
                             </div>
@@ -3675,46 +3794,21 @@
             }
         }
 
-        // --- RENDERIZADOR DE CARDS PARA TV (RESPONSIVO & ADAPTATIVO PARA PEDIDOS COM 1, 2-3 OU 4+ ITENS) ---
+        // --- RENDERIZADOR DE CARDS PARA TV (PRIORIDADE OPERACIONAL + ÍCONES NATIVOS OMS + RESPONSIVO) ---
         function renderTVCard(o) {
-            const delivery = parseDeliveryInfo(o);
-            const sla = getSLAInfo(o.createdAt, o.isExpress);
+            const pInfo = getOrderPriority(o);
             const isPicking = o.statusNativo === 'PICKING';
-            const isPickupOrder = delivery.isPickup;
-            const isIfood = delivery.label.includes('IFOOD');
-            const isRappi = delivery.label.includes('RAPPI');
-            const isUrgent = sla.urgency === 3 || o.isExpress || isIfood || isRappi;
-
             const itemsList = Array.isArray(o.items) ? o.items : [];
             const totalItemsCount = itemsList.length;
             const totalUnitsCount = itemsList.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0);
 
-            // Cores por Prioridade:
-            // 🔴 Vermelho (tv-card-red): Express / iFood / Rappi / SLA Crítico (<15m ou Estourado)
-            // 🟡 Amarelo (tv-card-yellow): Novo Pedido Retirada em Loja
-            // 🔵 Ciano (tv-card-blue): Novo Pedido Entrega / ShipFrom
-            // 🟠 Laranja Estável (tv-card-orange): Já está em Separação (PICKING)
-            let cardStyleClass = 'tv-card-blue';
-            let priorityColor = '#00e5ff';
-            let priorityLabel = isPickupOrder ? '🏪 RETIRADA EM LOJA' : delivery.label;
-
-            if (isPicking) {
-                cardStyleClass = 'tv-card-orange';
-                priorityColor = '#ff9100';
-                priorityLabel = `📦 SEPARANDO • ${isPickupOrder ? 'RETIRADA' : delivery.label.replace('🚚 ', '')}`;
-            } else if (isUrgent) {
-                cardStyleClass = 'tv-card-red';
-                priorityColor = '#ff1744';
-                priorityLabel = `🔥 URGENTE • ${isPickupOrder ? 'RETIRADA LOJA' : delivery.label.replace('🚚 ', '')}`;
-            } else if (isPickupOrder) {
-                cardStyleClass = 'tv-card-yellow';
-                priorityColor = '#ffea00';
-                priorityLabel = '🏪 RETIRADA EM LOJA';
-            } else {
-                cardStyleClass = 'tv-card-blue';
-                priorityColor = '#00e5ff';
-                priorityLabel = delivery.label;
-            }
+            const cardStyleClass = isPicking ? 'tv-card-orange' : pInfo.cardClass;
+            const priorityColor = isPicking ? '#ff9100' : pInfo.color;
+            const badgeText = isPicking ? 'SEPARANDO' : pInfo.badge;
+            const priorityLabel = pInfo.label;
+            const iconImgHtml = pInfo.iconUrl
+                ? `<img src="${pInfo.iconUrl}" alt="" style="height: clamp(18px, 1.6vw, 24px); width: auto; object-fit: contain; background: #ffffff; border-radius: 5px; padding: 2px 3px; flex-shrink: 0;" onerror="this.style.display='none';" />`
+                : '';
 
             return `
             <article class="tv-order-card ${cardStyleClass}" aria-label="Pedido ${o.id}" style="
@@ -3725,21 +3819,22 @@
                 font-family: var(--font-main) !important;
                 ${isPicking ? 'animation: none !important;' : ''}
             ">
-                <!-- Topo Compacto por Prioridade: Tipo/Prioridade em Destaque + Badge de Múltiplos Itens | #Pedido discreto -->
+                <!-- Topo Compacto por Prioridade: Badge + Ícone Nativo OMS + Tipo + Múltiplos Itens | #Pedido discreto -->
                 <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 8px; border-bottom: 2px solid ${priorityColor}55; gap: 10px; flex-wrap: wrap;">
-                    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                        <span style="background: ${priorityColor}; color: #000000; font-family: var(--font-main); font-size: clamp(12px, 1vw, 15px); font-weight: 900; padding: 3px 10px; border-radius: 6px; letter-spacing: 0.08em; text-transform: uppercase;">
-                            ${isPicking ? 'EM CURSO' : (isUrgent ? 'PRIORIDADE' : 'NOVO')}
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0;">
+                        <span style="background: ${priorityColor}; color: #000000; font-family: var(--font-main); font-size: clamp(11px, 0.95vw, 14px); font-weight: 900; padding: 3px 9px; border-radius: 6px; letter-spacing: 0.08em; text-transform: uppercase; flex-shrink: 0;">
+                            ${badgeText}
                         </span>
-                        <span style="font-size: clamp(16px, 1.5vw, 22px); font-weight: 900; color: ${priorityColor}; letter-spacing: 0.04em; text-transform: uppercase;">
+                        ${iconImgHtml}
+                        <span style="font-size: clamp(15px, 1.4vw, 21px); font-weight: 900; color: ${priorityColor}; letter-spacing: 0.03em; text-transform: uppercase;">
                             ${priorityLabel}
                         </span>
                         ${totalItemsCount > 1 ? `
-                        <span class="num-tabular" style="background: rgba(255, 234, 0, 0.15); border: 2px solid #ffea00; color: #ffea00; font-size: clamp(13px, 1.1vw, 16px); font-weight: 800; padding: 2px 10px; border-radius: 8px;">
+                        <span class="num-tabular" style="background: rgba(255, 234, 0, 0.15); border: 2px solid #ffea00; color: #ffea00; font-size: clamp(12px, 1.05vw, 15px); font-weight: 800; padding: 2px 9px; border-radius: 8px;">
                             📦 ${totalItemsCount} ITENS (${totalUnitsCount} UN)
                         </span>` : ''}
                     </div>
-                    <span class="num-tabular" style="font-size: clamp(13px, 1.1vw, 16px); font-weight: 700; color: rgba(255,255,255,0.55);">#${o.id}</span>
+                    <span class="num-tabular" style="font-size: clamp(12px, 1vw, 15px); font-weight: 700; color: rgba(255,255,255,0.55);">#${o.id}</span>
                 </div>
 
                 <!-- Lista Adaptativa de Produtos:
@@ -4070,8 +4165,11 @@
                             id: finalId,
                             createdAt: o.createdAt || (o.order && o.order.createdAt),
                             updatedAt: o.updatedAt,
+                            deadlineAt: o.deadlineAt || o.billingDeadlineAt || null,
                             customer: (o.customer && o.customer.fullName) || (o.order && o.order.customer && o.order.customer.fullName) || '---',
                             deliveryType: deliveryFallback.label,
+                            shippingMethod: (o.shipment && (o.shipment.method || o.shipment.methodId)) || (o.freightMethod && o.freightMethod.id) || domInfo.type || '',
+                            freightMethodName: (o.freightMethod && o.freightMethod.name) || '',
                             carrier: apiCarrier || domInfo.carrier || '',
                             statusNativo: o.status || o.fulfillmentStatus || 'WAITING',
                             isExpress: deliveryFallback.isExpress,
