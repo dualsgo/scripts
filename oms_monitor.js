@@ -1412,7 +1412,8 @@
         let domCarrierCache = new Map();
         let lastDomCacheTime = 0;
         const ALARM_COOLDOWN = 15000; // Cooldown mínimo de segurança entre disparos
-        const REMINDER_COOLDOWN = 300000; // Lembrete suave a cada 5 minutos (300.000 ms) se continuar sem separar
+        const SIREN_BURST_DURATION_MS = 10000; // 10 segundos de aviso sonoro contínuo
+        const REMINDER_COOLDOWN = 60000; // Repete o aviso de 10s a cada 60 segundos enquanto houver pendência
         const TEMPO_LIMITE_MINUTOS = 60; // SLA padrão da loja
 
         // --- ESTADO INTERNO ---
@@ -1551,12 +1552,27 @@
             }
         }
 
+        let sirenBurstInterval = null;
+        let sirenBurstTimeout = null;
+        let isSirenBurstActive = false;
+
+        function stopSirenBurst() {
+            if (sirenBurstInterval) {
+                clearInterval(sirenBurstInterval);
+                sirenBurstInterval = null;
+            }
+            if (sirenBurstTimeout) {
+                clearTimeout(sirenBurstTimeout);
+                sirenBurstTimeout = null;
+            }
+            isSirenBurstActive = false;
+        }
+
         function playSiren() {
-            // Alarme de emergência com volume máximo e padrão intermitente
+            // Pulso de sirene de emergência (~0.8s)
             const volume = 1.0;
             const duracao = 0.15;
 
-            // Sequência de tons agudos em padrão de alarme
             playBeep(1000, duracao, volume);
             setTimeout(() => playBeep(1200, duracao, volume), 100);
             setTimeout(() => playBeep(1400, duracao, volume), 200);
@@ -1564,6 +1580,26 @@
             setTimeout(() => playBeep(1000, duracao, volume), 400);
             setTimeout(() => playBeep(1400, duracao, volume), 500);
             setTimeout(() => playBeep(1600, 0.2, volume), 600);
+        }
+
+        function playSirenBurst(durationMs = SIREN_BURST_DURATION_MS) {
+            if (!audioCtx || audioCtx.state !== 'running') return;
+            if (isSirenBurstActive) return;
+
+            isSirenBurstActive = true;
+            playSiren();
+
+            sirenBurstInterval = setInterval(() => {
+                if (currentViewMode === 'NATIVE' || !audioCtx || audioCtx.state !== 'running') {
+                    stopSirenBurst();
+                    return;
+                }
+                playSiren();
+            }, 1100);
+
+            sirenBurstTimeout = setTimeout(() => {
+                stopSirenBurst();
+            }, durationMs);
         }
 
         function playNotificationChime() {
@@ -2111,14 +2147,37 @@
             flex: 1;
             min-height: 0;
             display: grid;
-            grid-template-columns: minmax(280px, 44%) minmax(0, 56%);
-            gap: clamp(16px, 2vw, 28px);
+            grid-template-columns: minmax(260px, 44%) minmax(0, 56%);
+            grid-template-rows: minmax(0, 1fr);
+            gap: clamp(14px, 2vw, 28px);
             padding: clamp(14px, 2vmin, 24px) clamp(16px, 2.2vw, 28px);
             background: #000000;
+            overflow: hidden;
         }
         @media (max-width: 1024px) {
             .tv-highlight-body-grid {
-                grid-template-columns: 38% 62%;
+                grid-template-columns: minmax(200px, 38%) minmax(0, 62%);
+            }
+        }
+
+        /* Grid Interno Responsivo do Modal de Alerta Delivery (iFood / Rappi / 99 / Despacho) */
+        .tv-delivery-alert-grid {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.65fr);
+            grid-template-rows: minmax(0, 1fr);
+            align-items: center;
+            gap: clamp(20px, 3vw, 48px);
+            padding: clamp(20px, 3.5vmin, 48px) clamp(24px, 3.5vw, 56px);
+            overflow: hidden;
+        }
+        @media (max-width: 900px) {
+            .tv-delivery-alert-grid {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto;
+                align-content: center;
+                text-align: center;
             }
         }
 
@@ -3029,38 +3088,38 @@
                         const badgeText = isDeliveryAlert ? 'DELIVERY • PRIORIDADE MÁXIMA' : 'ALERTA OPERACIONAL';
 
                         modalEl.innerHTML = `
-                        <div style="display: flex; flex-direction: column; height: 100%; width: 100%; background: #000000; font-family: var(--font-main); box-sizing: border-box;">
+                        <div style="display: flex; flex-direction: column; height: 100%; width: 100%; background: #000000; font-family: var(--font-main); box-sizing: border-box; overflow: hidden;">
                             <!-- Barra Superior da Marca / Canal -->
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: clamp(12px, 1.6vh, 18px) clamp(20px, 2.4vw, 32px); border-bottom: 4px solid ${activeHighlightOrder.color}; background: #000000; flex-shrink: 0;">
-                                <div style="display: flex; align-items: center; gap: 14px;">
-                                    <span style="background: ${activeHighlightOrder.color}; color: #000000; font-size: clamp(13px, 1.2vw, 18px); font-weight: 900; padding: 5px 14px; border-radius: 8px; letter-spacing: 0.1em; text-transform: uppercase;">${badgeText}</span>
-                                    <span style="font-size: clamp(22px, 2.4vw, 34px); font-weight: 900; color: ${activeHighlightOrder.color}; letter-spacing: 0.05em; text-transform: uppercase;">${activeHighlightOrder.brand}</span>
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: clamp(10px, 1.4vh, 16px) clamp(16px, 2.2vw, 28px); border-bottom: 4px solid ${activeHighlightOrder.color}; background: #000000; flex-shrink: 0; gap: 14px; flex-wrap: nowrap;">
+                                <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;">
+                                    <span style="background: ${activeHighlightOrder.color}; color: #000000; font-size: clamp(12px, 1.15vw, 17px); font-weight: 900; padding: 5px 14px; border-radius: 8px; letter-spacing: 0.08em; text-transform: uppercase; flex-shrink: 0;">${badgeText}</span>
+                                    <span style="font-size: clamp(20px, 2.2vw, 34px); font-weight: 900; color: ${activeHighlightOrder.color}; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${activeHighlightOrder.brand}</span>
                                 </div>
-                                <button type="button" onclick="window.__omsDismissHighlight && window.__omsDismissHighlight()" aria-label="Fechar alerta (Tecla ESC)" style="background: #000000; border: 2px solid rgba(255,255,255,0.45); color: #ffffff; padding: 8px 16px; min-height: 44px; border-radius: 10px; font-family: var(--font-main); font-size: 14px; font-weight: 800; letter-spacing: 1px; cursor: pointer; text-transform: uppercase;">
+                                <button type="button" onclick="window.__omsDismissHighlight && window.__omsDismissHighlight()" aria-label="Fechar alerta (Tecla ESC)" style="background: #000000; border: 2px solid rgba(255,255,255,0.45); color: #ffffff; padding: 8px 16px; min-height: 44px; border-radius: 10px; font-family: var(--font-main); font-size: 14px; font-weight: 800; letter-spacing: 1px; cursor: pointer; text-transform: uppercase; flex-shrink: 0;">
                                     ✕ ESC
                                 </button>
                             </div>
 
-                            <!-- Corpo Central de Alto Impacto (Visível a 10 metros) -->
-                            <div style="flex: 1; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.65fr); align-items: center; gap: clamp(24px, 3.5vw, 50px); padding: clamp(24px, 4vmin, 54px);">
-                                <div style="display: flex; flex-direction: column; gap: clamp(12px, 2vh, 22px);">
-                                    <div style="font-size: clamp(64px, 8vmin, 110px); line-height: 1; animation: heartbeat 1.2s infinite;">${activeHighlightOrder.icon}</div>
-                                    <div style="font-size: clamp(38px, 4.8vw, 76px); font-weight: 900; color: ${activeHighlightOrder.color}; text-transform: uppercase; line-height: 1.02; letter-spacing: -0.01em;">
+                            <!-- Corpo Central de Alto Impacto (Visível a 10 metros, 100% Responsivo) -->
+                            <div class="tv-delivery-alert-grid">
+                                <div style="display: flex; flex-direction: column; justify-content: center; gap: clamp(10px, 1.8vh, 20px); min-width: 0;">
+                                    <div style="font-size: clamp(54px, 7vmin, 96px); line-height: 1; animation: heartbeat 1.2s infinite;">${activeHighlightOrder.icon}</div>
+                                    <div style="font-size: clamp(32px, 4.2vw, 66px); font-weight: 900; color: ${activeHighlightOrder.color}; text-transform: uppercase; line-height: 1.04; letter-spacing: -0.01em; word-break: break-word;">
                                         ${activeHighlightOrder.title}
                                     </div>
-                                    <div style="font-size: clamp(20px, 2vw, 32px); color: #ffffff; font-weight: 700; line-height: 1.35; max-width: 92%;">
+                                    <div style="font-size: clamp(18px, 1.8vw, 28px); color: #ffffff; font-weight: 700; line-height: 1.35; max-width: 95%;">
                                         ${activeHighlightOrder.subtitle}
                                     </div>
                                 </div>
 
-                                <div style="background: #000000; border: 5px solid ${activeHighlightOrder.color}; border-radius: 26px; padding: clamp(24px, 4vmin, 48px) clamp(20px, 2.5vw, 36px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; box-shadow: 0 0 40px ${activeHighlightOrder.color}44;">
-                                    <span style="font-size: clamp(14px, 1.3vw, 20px); color: ${activeHighlightOrder.color}; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px;">PENDENTES</span>
-                                    <span class="num-tabular" style="font-size: clamp(90px, 11vw, 170px); font-weight: 800; color: #ffffff; line-height: 0.95;">${activeHighlightOrder.count}</span>
+                                <div style="background: #000000; border: 5px solid ${activeHighlightOrder.color}; border-radius: 24px; padding: clamp(20px, 3.5vmin, 42px) clamp(18px, 2.2vw, 32px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; box-shadow: 0 0 36px ${activeHighlightOrder.color}44; min-width: 0; width: 100%; max-width: 380px; justify-self: center;">
+                                    <span style="font-size: clamp(13px, 1.2vw, 18px); color: ${activeHighlightOrder.color}; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 8px;">PENDENTES</span>
+                                    <span class="num-tabular" style="font-size: clamp(72px, 9.5vw, 148px); font-weight: 800; color: #ffffff; line-height: 0.95;">${activeHighlightOrder.count}</span>
                                 </div>
                             </div>
                         </div>
                         `;
-                        modalEl.style.display = 'block';
+                        modalEl.style.display = 'flex';
                     }
 
                 } else {
@@ -3069,13 +3128,14 @@
                     const orderSla = getSLAInfo(activeHighlightOrder.createdAt, activeHighlightOrder.isExpress);
 
                     const labelStr = String(deliveryInfo.label).toUpperCase();
-                    const isIfood = labelStr.includes('IFOOD');
-                    const isRappi = labelStr.includes('RAPPI');
-                    const isAtrasadoOrCritico = orderSla.urgency === 3 || activeHighlightOrder.isExpress || isIfood || isRappi;
+                    const isIfood = labelStr.includes('IFOOD') || String(activeHighlightOrder.id || '').toUpperCase().startsWith('IFOOD');
+                    const isRappi = labelStr.includes('RAPPI') || String(activeHighlightOrder.id || '').toUpperCase().startsWith('RAPPI');
+                    const is99Ord = labelStr.includes('99') || String(activeHighlightOrder.id || '').toUpperCase().startsWith('99-');
+                    const isAtrasadoOrCritico = orderSla.urgency === 3 || activeHighlightOrder.isExpress || isIfood || isRappi || is99Ord;
 
                     // Sistema de Cores por Prioridade:
                     // 🔴 Vermelho (#ff1744): Prioridade Máxima (iFood, Rappi, Uber/Express ou SLA Crítico/Atrasado)
-                    // 🟡 Amarelo (#ffea00): Prioridade Alta (Retirada em Loja - Cliente busca na loja)
+                    // 🟡 Amarelo (#ffea00): Prioridade Alta (Retirada em Loja / 99 Entrega)
                     // 🔵 Ciano (#00e5ff): Prioridade Normal (Entrega / Transportadora / ShipFrom)
                     let themeColor = '#00e5ff';
                     let themeGlow = 'rgba(0, 229, 255, 0.45)';
@@ -3087,11 +3147,15 @@
                     if (isIfood) {
                         themeColor = '#ff1744';
                         themeGlow = 'rgba(255, 23, 68, 0.55)';
-                        priorityTag = '🛵 IFOOD EXPRESS • SEPARAR AGORA';
+                        priorityTag = '🛵 IFOOD EXPRESS';
                     } else if (isRappi) {
                         themeColor = '#ff6d00';
                         themeGlow = 'rgba(255, 109, 0, 0.55)';
-                        priorityTag = '🛵 RAPPI EXPRESS • SEPARAR AGORA';
+                        priorityTag = '🟠 RAPPI EXPRESS';
+                    } else if (is99Ord) {
+                        themeColor = '#ffea00';
+                        themeGlow = 'rgba(255, 234, 0, 0.55)';
+                        priorityTag = '🚕 99 ENTREGA';
                     } else if (isAtrasadoOrCritico) {
                         themeColor = '#ff1744';
                         themeGlow = 'rgba(255, 23, 68, 0.55)';
@@ -3159,8 +3223,16 @@
                         const imgUrl = item.imageUrl || '';
                         const safeItemName = String(item.name || 'Produto sem nome').replace(/"/g, '&quot;');
 
-                        // Formatar EAN destacando os últimos 4 dígitos para leitura rápida à distância
+                        // Escala tipográfica adaptativa para SKUs/EANs longos (ex: códigos externos do iFood)
+                        const rawSku = String(item.sku || '---').trim();
+                        const skuFontSize = rawSku.length > 14
+                            ? 'clamp(20px, 2.1vw, 34px)'
+                            : (rawSku.length > 8 ? 'clamp(26px, 3.2vw, 52px)' : 'clamp(36px, 4.6vw, 76px)');
+
                         const rawEan = String(item.ean || '---').trim();
+                        const eanFontSize = rawEan.length > 14
+                            ? 'clamp(22px, 2.6vw, 42px)'
+                            : 'clamp(28px, 3.6vw, 58px)';
                         const eanHtml = rawEan.length > 4
                             ? `${rawEan.slice(0, -4)}<span style="color: #ffea00; text-decoration: underline; text-underline-offset: 6px;">${rawEan.slice(-4)}</span>`
                             : rawEan;
@@ -3205,35 +3277,35 @@
                         modalEl.innerHTML = `
                     <div style="display: flex; flex-direction: column; height: 100%; width: 100%; background: #000000; overflow: hidden; font-family: var(--font-main); box-sizing: border-box;">
                         
-                        <!-- Barra Superior de Prioridade e Tipo do Pedido (Fluida & Visível de Longe) -->
-                        <div style="display: flex; justify-content: space-between; align-items: center; padding: clamp(10px, 1.4vh, 16px) clamp(16px, 2.2vw, 28px); background: #000000; border-bottom: 4px solid ${themeColor}; flex-shrink: 0; gap: 16px; flex-wrap: wrap;">
-                            <div style="display: flex; align-items: center; gap: clamp(10px, 1.2vw, 18px); min-width: 0;">
-                                <span style="background: ${themeColor}; color: #000000; font-family: var(--font-main); font-size: clamp(14px, 1.3vw, 20px); font-weight: 900; padding: 5px 14px; border-radius: 8px; letter-spacing: 1.5px; text-transform: uppercase; flex-shrink: 0;">
+                        <!-- Barra Superior de Prioridade e Tipo do Pedido (Fluida & Sem Quebra) -->
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: clamp(10px, 1.4vh, 16px) clamp(16px, 2.2vw, 28px); background: #000000; border-bottom: 4px solid ${themeColor}; flex-shrink: 0; gap: 14px; flex-wrap: nowrap;">
+                            <div style="display: flex; align-items: center; gap: clamp(10px, 1.2vw, 16px); flex: 1; min-width: 0;">
+                                <span style="background: ${themeColor}; color: #000000; font-family: var(--font-main); font-size: clamp(13px, 1.2vw, 19px); font-weight: 900; padding: 5px 14px; border-radius: 8px; letter-spacing: 1.5px; text-transform: uppercase; flex-shrink: 0;">
                                     ${isRotation ? 'PENDENTE' : 'NOVO'}
                                 </span>
-                                <span style="font-family: var(--font-main); font-size: clamp(24px, 2.9vw, 46px); font-weight: 900; color: ${themeColor}; letter-spacing: 0.03em; text-transform: uppercase; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                <span style="font-family: var(--font-main); font-size: clamp(22px, 2.7vw, 44px); font-weight: 900; color: ${themeColor}; letter-spacing: 0.03em; text-transform: uppercase; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                                     ${priorityTag}
                                 </span>
                             </div>
 
-                            <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
+                            <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
                                 ${hasManyItems ? `
-                                <div style="background: rgba(255, 234, 0, 0.14); border: 2px solid #ffea00; color: #ffea00; padding: 6px 14px; border-radius: 10px; font-family: var(--font-main); font-size: clamp(15px, 1.3vw, 20px); font-weight: 900; letter-spacing: 0.04em; text-transform: uppercase;">
+                                <div style="background: rgba(255, 234, 0, 0.14); border: 2px solid #ffea00; color: #ffea00; padding: 6px 14px; border-radius: 10px; font-family: var(--font-main); font-size: clamp(14px, 1.2vw, 19px); font-weight: 900; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;">
                                     📦 ${apiItemsList.length} ITENS (${totalOrderUnits} UN)
                                 </div>
-                                <div style="display: flex; align-items: center; gap: 6px; background: #000000; border: 2px solid #ffea00; border-radius: 10px; padding: 4px 8px;">
+                                <div style="display: flex; align-items: center; gap: 4px; background: #000000; border: 2px solid #ffea00; border-radius: 10px; padding: 4px 8px;">
                                     <button type="button" onclick="window.__omsStepItem && window.__omsStepItem(-1, ${apiItemsList.length})" aria-label="Item anterior" style="background: transparent; border: none; color: #ffea00; font-size: 18px; font-weight: 900; cursor: pointer; padding: 2px 6px;">◀</button>
-                                    <span class="num-tabular" style="font-size: clamp(16px, 1.4vw, 22px); font-weight: 800; color: #ffffff; padding: 0 4px;">
+                                    <span class="num-tabular" style="font-size: clamp(15px, 1.3vw, 20px); font-weight: 800; color: #ffffff; padding: 0 4px;">
                                         ${activeOrderItemIndex + 1}/${apiItemsList.length}
                                     </span>
                                     <button type="button" onclick="window.__omsStepItem && window.__omsStepItem(1, ${apiItemsList.length})" aria-label="Próximo item" style="background: transparent; border: none; color: #ffea00; font-size: 18px; font-weight: 900; cursor: pointer; padding: 2px 6px;">▶</button>
                                 </div>
                                 ` : `
-                                <div class="num-tabular" style="background: #000000; border: 2px solid rgba(255,255,255,0.35); color: #ffffff; padding: 6px 16px; border-radius: 10px; font-size: clamp(16px, 1.4vw, 22px); font-weight: 800; letter-spacing: 0.04em;">
+                                <div class="num-tabular" style="background: #000000; border: 2px solid rgba(255,255,255,0.35); color: #ffffff; padding: 6px 14px; border-radius: 10px; font-size: clamp(15px, 1.3vw, 20px); font-weight: 800; letter-spacing: 0.04em; white-space: nowrap;">
                                     📦 1 ITEM (${totalOrderUnits} UN)
                                 </div>
                                 `}
-                                <button type="button" onclick="window.__omsDismissHighlight && window.__omsDismissHighlight()" aria-label="Fechar destaque e ver lista completa (Tecla ESC)" style="background: #000000; border: 2px solid rgba(255,255,255,0.45); color: #ffffff; padding: 8px 16px; min-height: 44px; border-radius: 10px; font-family: var(--font-main); font-size: 14px; font-weight: 800; letter-spacing: 1px; cursor: pointer; text-transform: uppercase;">
+                                <button type="button" onclick="window.__omsDismissHighlight && window.__omsDismissHighlight()" aria-label="Fechar destaque e ver lista completa (Tecla ESC)" style="background: #000000; border: 2px solid rgba(255,255,255,0.45); color: #ffffff; padding: 8px 16px; min-height: 44px; border-radius: 10px; font-family: var(--font-main); font-size: 14px; font-weight: 800; letter-spacing: 1px; cursor: pointer; text-transform: uppercase; white-space: nowrap;">
                                     ✕ ESC
                                 </button>
                             </div>
@@ -3243,42 +3315,42 @@
                         <div class="tv-highlight-body-grid">
                             
                             <!-- Metade Esquerda: Quadro Branco Gigante Ocupando 100% da Altura Disponível -->
-                            <div style="width: 100%; height: 100%; min-height: 0; background: #ffffff; border-radius: clamp(16px, 2vmin, 24px); padding: clamp(12px, 1.8vmin, 22px); border: 4px solid #ffffff; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                            <div style="width: 100%; height: 100%; min-width: 0; min-height: 0; background: #ffffff; border-radius: clamp(16px, 2vmin, 24px); padding: clamp(12px, 1.8vmin, 22px); border: 4px solid #ffffff; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                                 ${imgUrl
-                                ? `<img src="${imgUrl}" alt="${safeItemName}" style="max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;">`
+                                ? `<img src="${imgUrl}" alt="${safeItemName}" style="max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"><div style="display: none; font-size: clamp(80px, 12vmin, 150px); align-items: center; justify-content: center;" role="img" aria-label="Produto sem imagem">🧸</div>`
                                 : `<div style="font-size: clamp(80px, 12vmin, 150px);" role="img" aria-label="Produto sem imagem">🧸</div>`
                             }
                             </div>
 
                             <!-- Metade Direita: Nome do Produto + Blocos Gigantes de SAP, QTD e EAN -->
-                            <div style="display: flex; flex-direction: column; justify-content: space-between; height: 100%; min-height: 0; gap: clamp(10px, 1.5vh, 18px);">
+                            <div style="display: flex; flex-direction: column; justify-content: space-between; height: 100%; min-width: 0; min-height: 0; gap: clamp(10px, 1.5vh, 18px); overflow: hidden;">
                                 
                                 <!-- Nome do Produto em Alto Contraste e Tipografia Limpa -->
-                                <div style="background: #000000; border-left: 6px solid ${themeColor}; padding: 4px 0 4px 18px; flex-shrink: 0;">
+                                <div style="background: #000000; border-left: 6px solid ${themeColor}; padding: 4px 0 4px 18px; flex-shrink: 0; min-width: 0;">
                                     <div style="font-size: clamp(22px, 2.4vw, 40px); color: #ffffff; line-height: 1.18; font-family: var(--font-main); font-weight: 800; letter-spacing: -0.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
                                         ${item.name || 'Produto sem nome'}
                                     </div>
                                 </div>
 
                                 <!-- Linha Central: CÓDIGO SAP GIGANTE + QUANTIDADE GIGANTE -->
-                                <div style="display: grid; grid-template-columns: 1.25fr 0.95fr; gap: clamp(12px, 1.6vw, 20px); flex: 1; min-height: 0;">
+                                <div style="display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr); gap: clamp(12px, 1.6vw, 20px); flex: 1; min-height: 0; min-width: 0;">
                                     <!-- CÓDIGO SAP -->
-                                    <div style="background: #000000; padding: clamp(10px, 1.5vh, 18px) clamp(14px, 1.6vw, 22px); border-radius: 18px; border: 4px solid #00e5ff; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                                    <div style="background: #000000; padding: clamp(10px, 1.5vh, 18px) clamp(12px, 1.5vw, 20px); border-radius: 18px; border: 4px solid #00e5ff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; overflow: hidden; text-align: center;">
                                         <span style="font-size: clamp(13px, 1.2vw, 18px); font-family: var(--font-main); font-weight: 800; color: #00e5ff; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px;">CÓDIGO SAP</span>
-                                        <span class="num-tabular" style="font-size: clamp(38px, 4.8vw, 80px); font-weight: 800; color: #ffffff; letter-spacing: 0.04em; line-height: 1;">${item.sku || '---'}</span>
+                                        <span class="num-tabular" style="font-size: ${skuFontSize}; font-weight: 800; color: #ffffff; letter-spacing: 0.03em; line-height: 1.05; max-width: 100%; overflow-wrap: anywhere;">${rawSku}</span>
                                     </div>
 
                                     <!-- QUANTIDADE -->
-                                    <div style="background: #000000; ${qtyBlockStyle} padding: clamp(10px, 1.5vh, 18px) clamp(14px, 1.6vw, 22px); border-radius: 18px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                                    <div style="background: #000000; ${qtyBlockStyle} padding: clamp(10px, 1.5vh, 18px) clamp(12px, 1.5vw, 20px); border-radius: 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; overflow: hidden; text-align: center;">
                                         <span style="font-size: clamp(13px, 1.2vw, 18px); font-family: var(--font-main); font-weight: 800; color: #ffffff; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px;">QUANTIDADE</span>
-                                        <span class="num-tabular" style="font-size: clamp(40px, 5vw, 84px); font-weight: 800; color: ${qtyBorderColor}; letter-spacing: 0.02em; line-height: 1;">${qtyText}</span>
+                                        <span class="num-tabular" style="font-size: clamp(38px, 4.8vw, 80px); font-weight: 800; color: ${qtyBorderColor}; letter-spacing: 0.02em; line-height: 1; white-space: nowrap;">${qtyText}</span>
                                     </div>
                                 </div>
 
                                 <!-- Base: CÓDIGO DE BARRAS (EAN) GIGANTE LARGURA TOTAL -->
-                                <div style="background: #000000; padding: clamp(10px, 1.5vh, 18px) clamp(16px, 1.8vw, 24px); border-radius: 18px; border: 4px solid #ffea00; display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0;">
+                                <div style="background: #000000; padding: clamp(10px, 1.5vh, 18px) clamp(16px, 1.8vw, 24px); border-radius: 18px; border: 4px solid #ffea00; display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0; min-width: 0; overflow: hidden; text-align: center;">
                                     <span style="font-size: clamp(13px, 1.15vw, 17px); font-family: var(--font-main); font-weight: 800; color: #ffea00; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 4px;">CÓDIGO DE BARRAS (EAN)</span>
-                                    <span class="num-tabular" style="font-size: clamp(28px, 3.6vw, 58px); font-weight: 800; color: #ffffff; letter-spacing: 0.05em; line-height: 1.05;">${eanHtml}</span>
+                                    <span class="num-tabular" style="font-size: ${eanFontSize}; font-weight: 800; color: #ffffff; letter-spacing: 0.04em; line-height: 1.05; max-width: 100%; overflow-wrap: anywhere;">${eanHtml}</span>
                                 </div>
                             </div>
                         </div>
@@ -3291,7 +3363,7 @@
                         </div>
                     </div>
                 `;
-                        modalEl.style.display = 'block';
+                        modalEl.style.display = 'flex';
                     } else {
                         // Atualização Flicker-Free da barra fina de progresso
                         const progressBarEl = document.getElementById('oms-new-order-progress-bar');
@@ -3395,7 +3467,7 @@
                 tvDashboard.innerHTML = `
                 ${isListEmpty ? emptyStateHtml : `
                     ${(ifoodAlertHtml || rappiAlertHtml || n99AlertHtml) ? `
-                    <div style="flex-shrink: 0;">
+                    <div id="tv-delivery-banners" style="flex-shrink: 0;">
                         ${ifoodAlertHtml}
                         ${rappiAlertHtml}
                         ${n99AlertHtml}
@@ -3489,10 +3561,14 @@
                 });
             }
 
-            // Ocultar as colunas de fundo enquanto o modal de destaque estiver aberto para eliminar qualquer vazamento de borda
+            // Ocultar as colunas e banners de delivery enquanto o modal de destaque estiver aberto para manter .tv-header alinhado no topo
             const mainGridEl = tvDashboard.querySelector('.tv-main-grid');
             if (mainGridEl) {
                 mainGridEl.style.visibility = activeHighlightOrder ? 'hidden' : 'visible';
+            }
+            const deliveryBannersEl = document.getElementById('tv-delivery-banners');
+            if (deliveryBannersEl) {
+                deliveryBannersEl.style.display = activeHighlightOrder ? 'none' : 'block';
             }
 
             // --- SISTEMA INTELIGENTE DE ALERTA SONORO ---
@@ -3544,21 +3620,20 @@
                 const hasDispatchAlert = counts.SEND_READY > 0;
                 const hasUnpickedOrders = (pedidosNovosWaiting.length > 0 || currentIfoodCount > 0 || currentRappiCount > 0 || current99Count > 0);
 
-                // 1. Novo Pedido (WAITING), Novo iFood/Rappi ou Nova Lista de Despacho -> Toca Sirene Imediatamente
-                if (hasBrandNewOrder) {
+                // Se não há mais nenhuma pendência, silencia imediatamente qualquer aviso em andamento
+                if (!hasUnpickedOrders && !hasDispatchAlert) {
+                    stopSirenBurst();
+                }
+                // 1. Novo Pedido (WAITING), Novo iFood/Rappi/99 ou Nova Lista de Despacho -> 10 segundos de sirene imediatamente
+                else if (hasBrandNewOrder) {
                     if (now - lastAlarmPlayedTime > 3000) {
-                        playSiren();
+                        playSirenBurst(SIREN_BURST_DURATION_MS);
                         lastAlarmPlayedTime = now;
                     }
                 }
-                // 2. Lista de Despacho Pendente (SEND_READY > 0) -> Alerta crítico bloqueante: toca sirene a cada 30s até expedir
-                else if (hasDispatchAlert && (now - lastAlarmPlayedTime >= 30000)) {
-                    playSiren();
-                    lastAlarmPlayedTime = now;
-                }
-                // 3. Pedido Novo ainda aguardando separação (WAITING) -> Lembrete suave a cada 5 minutos sem bipar sem parar
-                else if (hasUnpickedOrders && (now - lastAlarmPlayedTime >= REMINDER_COOLDOWN)) {
-                    playNotificationChime();
+                // 2. Qualquer pendência ativa (Novo Pedido, Delivery ou Lista de Despacho) -> 10 segundos de aviso a cada 60 segundos
+                else if (now - lastAlarmPlayedTime >= REMINDER_COOLDOWN) {
+                    playSirenBurst(SIREN_BURST_DURATION_MS);
                     lastAlarmPlayedTime = now;
                 }
             }
