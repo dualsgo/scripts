@@ -202,20 +202,32 @@
     }
 
     // =========================================================================
-    // 1. MÓDULO DE MONITORAMENTO & COLETA IFOOD (BFF API OTIMIZADA + FALLBACK DOM)
+    // 1. MÓDULO DE MONITORAMENTO & COLETA IFOOD (BFF API 24/7 HANDS-FREE + SOFT-REFRESH + WATCHDOG SEGURO)
     // =========================================================================
     if (isIfood) {
         let ifoodModalElement = null;
         let capturedAuthHeader = '';
         let capturedSelectedStores = '';
         let isFetchingIfood = false;
+        let bffHasSucceededOnce = false;
+        let consecutiveAuthErrors = 0;
+        let consecutiveNetErrors = 0;
+        let lastKnownIfoodCount = 0;
+        let lastKnownColetaCount = 0;
+        let lastSoftRefreshAt = 0;
+        let pendingSinceMs = 0;
         const ifoodOrderDetailCache = new Map(); // Cache O(1) de detalhes por orderId (evita re-fetch repetido)
 
-        // Interceptação passiva via Ponte Cross-Browser (Firefox Ubuntu + Chrome) para capturar Bearer token e x-selected-stores
+        // Interceptação passiva via Ponte Cross-Browser (Firefox Ubuntu + Chrome) para capturar Bearer token e x-selected-stores sempre atualizados
         installPageNetworkBridge(['/bff/'], (ev) => {
             if (ev.kind === 'req' && ev.headers) {
-                if (ev.headers['authorization']) capturedAuthHeader = ev.headers['authorization'];
-                if (ev.headers['x-selected-stores']) capturedSelectedStores = ev.headers['x-selected-stores'];
+                if (ev.headers['authorization']) {
+                    capturedAuthHeader = ev.headers['authorization'];
+                }
+                if (ev.headers['x-selected-stores']) {
+                    capturedSelectedStores = ev.headers['x-selected-stores'];
+                    try { sessionStorage.setItem('_oms_ifood_stores', capturedSelectedStores); } catch (e) { }
+                }
             }
         });
 
@@ -229,15 +241,21 @@
         }
 
         function getIfoodAuthAndStores() {
-            let auth = capturedAuthHeader;
-            if (!auth) {
-                const tokenCookie = getCookieVal('sm_auth_token');
-                if (tokenCookie) auth = tokenCookie.startsWith('Bearer ') ? tokenCookie : ('Bearer ' + tokenCookie);
+            // Sempre prioriza o cookie mais recente (se existir e não for HttpOnly), pois a SPA o renova ao fazer refresh de JWT
+            const tokenCookie = getCookieVal('sm_auth_token');
+            let auth = '';
+            if (tokenCookie) {
+                auth = tokenCookie.startsWith('Bearer ') ? tokenCookie : ('Bearer ' + tokenCookie);
+            } else if (capturedAuthHeader) {
+                auth = capturedAuthHeader;
             }
 
             let storeIds = [];
-            if (capturedSelectedStores) {
-                storeIds = capturedSelectedStores.split(',').map(s => s.trim()).filter(Boolean);
+            const rawCapturedStores = capturedSelectedStores || (() => {
+                try { return sessionStorage.getItem('_oms_ifood_stores') || ''; } catch (e) { return ''; }
+            })();
+            if (rawCapturedStores) {
+                storeIds = rawCapturedStores.split(',').map(s => s.trim()).filter(Boolean);
             }
             if (storeIds.length === 0) {
                 try {
@@ -253,6 +271,63 @@
                 } catch (e) { }
             }
             return { auth, storeIds };
+        }
+
+        // Soft-Refresh silencioso na SPA (sem F5): força o iFood a renovar o JWT e atualizar a lista sem risco de tela de erro
+        function triggerIfoodSoftRefresh(reason) {
+            const now = Date.now();
+            if (now - lastSoftRefreshAt < 30000) return; // Rate-limit de 30s
+            lastSoftRefreshAt = now;
+
+            try {
+                // 1. Procura botão nativo de atualizar na tela
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const refreshBtn = buttons.find(b => {
+                    const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '') + ' ' + (b.innerText || '')).toLowerCase();
+                    return label.includes('atualizar') || label.includes('recarregar');
+                });
+                if (refreshBtn && !refreshBtn.disabled) {
+                    refreshBtn.click();
+                    console.log('[OMNI MONITOR] iFood Soft-Refresh via botão nativo:', reason);
+                    return;
+                }
+
+                // 2. Alterna discretamente na barra lateral da SPA para forçar re-fetch + renovação de JWT
+                const latestLink = document.querySelector('a[href*="/order/latest"]');
+                const pickingLink = document.querySelector('a[href*="/order/picking"], a[href*="/order/in-progress"]');
+                if (latestLink && pickingLink) {
+                    pickingLink.click();
+                    setTimeout(() => {
+                        try { latestLink.click(); } catch (e) { }
+                    }, 900);
+                    console.log('[OMNI MONITOR] iFood Soft-Refresh via navegação SPA:', reason);
+                } else if (latestLink) {
+                    latestLink.click();
+                    console.log('[OMNI MONITOR] iFood Soft-Refresh via link Novos Pedidos:', reason);
+                }
+            } catch (e) { }
+        }
+
+        // Watchdog de reload seguro: só recarrega em último caso (401 persistente) e APENAS após confirmar que a internet/servidor responde
+        async function safeReloadIfoodTab(reason) {
+            try {
+                const lastReload = Number(sessionStorage.getItem('_oms_ifood_last_reload') || 0);
+                if (Date.now() - lastReload < 180000) return; // Máximo 1 reload a cada 3 minutos (anti-loop)
+
+                // Testa conectividade antes de recarregar para NUNCA cair em tela "Sem conexão" no modo TV
+                const probe = await fetch(window.location.origin + '/', {
+                    method: 'HEAD',
+                    cache: 'no-store',
+                    credentials: 'include'
+                });
+                if (probe && (probe.ok || probe.status < 500)) {
+                    sessionStorage.setItem('_oms_ifood_last_reload', String(Date.now()));
+                    console.warn('[OMNI MONITOR] Watchdog iFood recarregando aba com rede confirmada:', reason);
+                    window.location.reload();
+                }
+            } catch (e) {
+                console.warn('[OMNI MONITOR] Watchdog iFood adiou reload (rede oscilando):', reason);
+            }
         }
 
         function updateIfoodModal(count) {
@@ -278,48 +353,80 @@
             if (isFetchingIfood) return;
             isFetchingIfood = true;
 
-            let newOrdersCount = 0;
-            let aguardandoColetaCount = 0;
+            let newOrdersCount = lastKnownIfoodCount;
+            let aguardandoColetaCount = lastKnownColetaCount;
             let isLoggedIn = !document.querySelector('input[type="password"]');
             let collectedOrders = [];
+            let shouldWriteOrders = false;
 
             try {
                 const isSeparadorHost = currentHost.includes('separador.ifood.com.br');
                 const { auth, storeIds } = getIfoodAuthAndStores();
 
-                if (isSeparadorHost && isLoggedIn && auth && storeIds.length > 0) {
+                if (isSeparadorHost && isLoggedIn && storeIds.length > 0) {
                     const commonHeaders = {
                         'Accept': 'application/json',
                         'Content-Type': 'application/json',
-                        'Authorization': auth,
+                        'Cache-Control': 'no-cache, no-store',
                         'x-selected-stores': storeIds.join(',')
                     };
+                    if (auth) commonHeaders['Authorization'] = auth;
 
-                    // 1. Única requisição leve de contadores: POST /bff/v1/order/counters
+                    // 1. Consulta direta ao servidor (sem cache e com cookies de sessão)
                     const countersRes = await fetch('/bff/v1/order/counters', {
                         method: 'POST',
                         headers: commonHeaders,
+                        credentials: 'include',
+                        cache: 'no-store',
                         body: JSON.stringify({ storeIds })
                     });
 
                     if (countersRes.status === 401 || countersRes.status === 403) {
-                        isLoggedIn = false;
+                        // Token vencido: limpa header antigo e aciona renovação silenciosa na SPA
+                        capturedAuthHeader = '';
+                        consecutiveAuthErrors++;
+                        triggerIfoodSoftRefresh('HTTP ' + countersRes.status);
+                        if (consecutiveAuthErrors >= 8) {
+                            isLoggedIn = false;
+                            safeReloadIfoodTab('401 persistente (' + consecutiveAuthErrors + 'x)');
+                        }
                     } else if (countersRes.ok) {
+                        bffHasSucceededOnce = true;
+                        consecutiveAuthErrors = 0;
+                        consecutiveNetErrors = 0;
+                        shouldWriteOrders = true;
+
                         const countersJson = await countersRes.json();
                         const cData = (countersJson && countersJson.data) || {};
                         newOrdersCount = Number(cData.issued || 0);
                         aguardandoColetaCount = Number(cData.awaitingDeliveryTakeout || 0);
+                        lastKnownIfoodCount = newOrdersCount;
+                        lastKnownColetaCount = aguardandoColetaCount;
 
                         // 2. SOMENTE se houver pedidos novos (issued > 0), busca a lista e detalhes em cache O(1)
                         if (newOrdersCount > 0) {
+                            if (!pendingSinceMs) pendingSinceMs = Date.now();
+                            // Mantém a tela visual da aba sincronizada se houver pendência há mais de 45s
+                            if (Date.now() - pendingSinceMs > 45000) {
+                                triggerIfoodSoftRefresh('sync visual com pendência ativa');
+                            }
+
                             const listRes = await fetch('/bff/v1/order/new-orders', {
                                 method: 'POST',
                                 headers: commonHeaders,
+                                credentials: 'include',
+                                cache: 'no-store',
                                 body: JSON.stringify({ currentPage: 1, pageSize: 20, storeIds, filters: {} })
                             });
                             if (listRes.ok) {
                                 const listJson = await listRes.json();
                                 const rawOrders = (listJson && listJson.data && Array.isArray(listJson.data.data)) ? listJson.data.data : [];
+
+                                // Sincroniza contagem real com a lista retornada (evita divergência entre counters e new-orders)
+                                if (rawOrders.length === 0) {
+                                    newOrdersCount = 0;
+                                    lastKnownIfoodCount = 0;
+                                }
 
                                 // Limpa cache de pedidos que já saíram da fila
                                 const activeIds = new Set(rawOrders.map(o => o.id).filter(Boolean));
@@ -336,7 +443,9 @@
                                         try {
                                             const detRes = await fetch(`/bff/v2/order/details/${ordId}`, {
                                                 method: 'GET',
-                                                headers: commonHeaders
+                                                headers: commonHeaders,
+                                                credentials: 'include',
+                                                cache: 'no-store'
                                             });
                                             if (detRes.ok) {
                                                 const detJson = await detRes.json();
@@ -379,24 +488,51 @@
                                 }
                             }
                         } else {
+                            // Zero pendentes no servidor -> limpa imediatamente cache e fila no Hub
+                            pendingSinceMs = 0;
                             ifoodOrderDetailCache.clear();
                         }
                     }
-                } else if (isLoggedIn) {
-                    // Fallback DOM leve caso esteja em outro portal iFood ou antes de capturar header BFF
+                } else if (isSeparadorHost && isLoggedIn && storeIds.length === 0) {
+                    // Ainda não capturou storeIds (ex: página acabou de abrir em background): aciona soft-refresh para capturar headers
+                    consecutiveAuthErrors++;
+                    triggerIfoodSoftRefresh('aguardando captura de storeIds');
+                    if (consecutiveAuthErrors >= 10) {
+                        safeReloadIfoodTab('storeIds não capturados após 80s');
+                    }
+                } else if (isLoggedIn && !bffHasSucceededOnce) {
+                    // Fallback DOM SOMENTE para outros portais iFood (ou antes da BFF conectar pela primeira vez)
+                    shouldWriteOrders = true;
+                    newOrdersCount = 0;
                     const pedidosLink = document.querySelector('a[href*="/order/latest"]');
                     const outputEl = pedidosLink ? pedidosLink.querySelector('output') : document.querySelector('output[aria-label*="pedidos"]');
                     if (outputEl && outputEl.textContent) {
                         const val = parseInt(outputEl.textContent.trim(), 10);
                         if (!isNaN(val)) newOrdersCount = val;
                     }
+                    lastKnownIfoodCount = newOrdersCount;
+                }
+
+                // Keep-alive preventivo a cada 10 minutos no modo TV para manter sessão/JWT sempre vivos
+                if (isSeparadorHost && isLoggedIn && (Date.now() - lastSoftRefreshAt > 600000)) {
+                    triggerIfoodSoftRefresh('keep-alive preventivo 10min');
                 }
 
                 updateIfoodModal(newOrdersCount);
-                GM_setValue('ifoodOrdersList', collectedOrders.length > 0 ? JSON.stringify(collectedOrders) : null);
-                GM_setValue('ifoodOrderDetails', collectedOrders.length > 0 ? JSON.stringify(collectedOrders[0]) : null);
+                if (shouldWriteOrders) {
+                    GM_setValue('ifoodOrdersList', collectedOrders.length > 0 ? JSON.stringify(collectedOrders) : null);
+                    GM_setValue('ifoodOrderDetails', collectedOrders.length > 0 ? JSON.stringify(collectedOrders[0]) : null);
+                }
             } catch (e) {
-                console.error("[OMNI MONITOR] Erro no coletor iFood BFF:", e);
+                consecutiveNetErrors++;
+                console.error("[OMNI MONITOR] Erro de rede no coletor iFood BFF (" + consecutiveNetErrors + "):", e);
+                if (consecutiveNetErrors >= 4) {
+                    // Após 32s de erro consecutivo, evita manter pedido fantasma preso
+                    newOrdersCount = 0;
+                    lastKnownIfoodCount = 0;
+                    GM_setValue('ifoodOrdersList', null);
+                    GM_setValue('ifoodOrderDetails', null);
+                }
             } finally {
                 GM_setValue('ifoodPendingOrders', newOrdersCount);
                 GM_setValue('ifoodAguardandoColeta', aguardandoColetaCount);
@@ -416,7 +552,7 @@
         }
         setTimeout(pollIfoodBff, 1500);
 
-        console.log("[OMNI MONITOR] Coletor iFood BFF API ativo em segundo plano (8s).");
+        console.log("[OMNI MONITOR] Coletor iFood BFF 24/7 Hands-Free ativo em segundo plano (8s).");
         return;
     }
 
@@ -1413,9 +1549,10 @@
         let isFetchingApi = false;
         let domCarrierCache = new Map();
         let lastDomCacheTime = 0;
-        const ALARM_COOLDOWN = 15000; // Cooldown mínimo de segurança entre disparos
-        const SIREN_BURST_DURATION_MS = 10000; // 10 segundos de aviso sonoro contínuo
-        const REMINDER_COOLDOWN = 60000; // Repete o aviso de 10s a cada 60 segundos enquanto houver pendência
+        const ALARM_COOLDOWN = 10000; // Cooldown mínimo de segurança entre disparos
+        const SIREN_BURST_DURATION_MS = 11000; // ~11 segundos de aviso sonoro ritmado na chegada
+        const REMINDER_COOLDOWN = 40000; // Repete o lembrete a cada 40 segundos para fila padrão
+        const URGENT_REMINDER_COOLDOWN = 30000; // Repete a cada 30 segundos se houver Delivery ou Super Expressa pendente
         const TEMPO_LIMITE_MINUTOS = 60; // SLA padrão da loja
 
         // --- ESTADO INTERNO ---
@@ -1563,59 +1700,100 @@
             isAlertSequenceActive = false;
         }
 
-        // Sino harmônico agradável (estilo aeroporto/loja): audível à distância sem ser irritante
+        // Sino de loja de alta presença (corta ruído de loja cheia sem ser bipe estridente)
         function playBellNote(freq, startOffsetSec, durationSec, peakVol) {
             if (!audioCtx || audioCtx.state !== 'running') return;
             try {
                 const start = audioCtx.currentTime + startOffsetSec;
                 const oscMain = audioCtx.createOscillator();
-                const oscHarm = audioCtx.createOscillator();
+                const oscHarm2 = audioCtx.createOscillator();
+                const oscHarm3 = audioCtx.createOscillator();
                 const gainMain = audioCtx.createGain();
-                const gainHarm = audioCtx.createGain();
+                const gainHarm2 = audioCtx.createGain();
+                const gainHarm3 = audioCtx.createGain();
 
-                oscMain.type = 'sine';
+                // Fundamental em triangle (mais corpo e presença que sine puro em ambiente barulhento)
+                oscMain.type = 'triangle';
                 oscMain.frequency.setValueAtTime(freq, start);
 
-                oscHarm.type = 'triangle';
-                oscHarm.frequency.setValueAtTime(freq * 2, start);
+                // 2ª harmônica (oitava) + 3ª harmônica (brilho metálico de sino PA de loja)
+                oscHarm2.type = 'sine';
+                oscHarm2.frequency.setValueAtTime(freq * 2, start);
 
-                // Envelope de sino: ataque suave (18ms, sem estalo) + decaimento musical longo
+                oscHarm3.type = 'sine';
+                oscHarm3.frequency.setValueAtTime(freq * 3, start);
+
+                // Ataque firme (7ms) para atravessar barulho de loja + decaimento limpo
                 gainMain.gain.setValueAtTime(0.0001, start);
-                gainMain.gain.linearRampToValueAtTime(peakVol, start + 0.018);
+                gainMain.gain.linearRampToValueAtTime(peakVol, start + 0.007);
                 gainMain.gain.exponentialRampToValueAtTime(0.0001, start + durationSec);
 
-                gainHarm.gain.setValueAtTime(0.0001, start);
-                gainHarm.gain.linearRampToValueAtTime(peakVol * 0.16, start + 0.015);
-                gainHarm.gain.exponentialRampToValueAtTime(0.0001, start + durationSec * 0.55);
+                gainHarm2.gain.setValueAtTime(0.0001, start);
+                gainHarm2.gain.linearRampToValueAtTime(peakVol * 0.42, start + 0.006);
+                gainHarm2.gain.exponentialRampToValueAtTime(0.0001, start + durationSec * 0.65);
+
+                gainHarm3.gain.setValueAtTime(0.0001, start);
+                gainHarm3.gain.linearRampToValueAtTime(peakVol * 0.18, start + 0.005);
+                gainHarm3.gain.exponentialRampToValueAtTime(0.0001, start + durationSec * 0.40);
 
                 oscMain.connect(gainMain);
-                oscHarm.connect(gainHarm);
+                oscHarm2.connect(gainHarm2);
+                oscHarm3.connect(gainHarm3);
                 gainMain.connect(audioCtx.destination);
-                gainHarm.connect(audioCtx.destination);
+                gainHarm2.connect(audioCtx.destination);
+                gainHarm3.connect(audioCtx.destination);
 
                 oscMain.start(start);
-                oscHarm.start(start);
+                oscHarm2.start(start);
+                oscHarm3.start(start);
                 oscMain.stop(start + durationSec + 0.05);
-                oscHarm.stop(start + durationSec * 0.6 + 0.05);
+                oscHarm2.stop(start + durationSec * 0.7 + 0.05);
+                oscHarm3.stop(start + durationSec * 0.45 + 0.05);
             } catch (e) { }
         }
 
-        function playSiren() {
-            // Acorde musical ascendente claro e agradável (Fá Maior: F5 -> A5 -> C6 -> F6)
+        function playSiren(mode = 'NORMAL') {
+            // 3 assinaturas sonoras distintas (alta inteligibilidade em loja cheia):
+            // - 'URGENT'  : Delivery / Super Expressa -> arpejo agudo ascendente com eco duplo
+            // - 'NORMAL'  : Separação OMNI padrão     -> arpejo ascendente firme em Sol Maior
+            // - 'DISPATCH': Lista de Despacho         -> "Ding-Dong" descendente duplo mais grave/encorpado (inconfundível)
             if (!audioCtx) initAudio();
             if (!audioCtx || audioCtx.state !== 'running') return;
-            playBellNote(698.46, 0.00, 0.55, 0.32); // F5
-            playBellNote(880.00, 0.14, 0.55, 0.34); // A5
-            playBellNote(1046.50, 0.28, 0.65, 0.38); // C6
-            playBellNote(1396.91, 0.44, 0.90, 0.32); // F6
+
+            const normalizedMode = (mode === true) ? 'URGENT' : (mode === false ? 'NORMAL' : mode);
+
+            if (normalizedMode === 'DISPATCH') {
+                // Som exclusivo de Expedição / Lista de Despacho: Ding-Dong descendente duplo (E5 -> C5 ... E5 -> C5)
+                playBellNote(659.25, 0.00, 0.42, 0.62); // E5 (Ding)
+                playBellNote(523.25, 0.24, 0.58, 0.66); // C5 (Dong)
+                playBellNote(659.25, 0.68, 0.42, 0.62); // E5 (Ding)
+                playBellNote(523.25, 0.92, 0.72, 0.68); // C5 (Dong longo)
+            } else if (normalizedMode === 'URGENT') {
+                // Chamada dupla energética para Delivery / Super Expressa / iFood
+                playBellNote(880.00,  0.00, 0.42, 0.55); // A5
+                playBellNote(1174.66, 0.11, 0.42, 0.60); // D6
+                playBellNote(1396.91, 0.22, 0.48, 0.65); // F6
+                playBellNote(1760.00, 0.34, 0.62, 0.68); // A6
+                playBellNote(1760.00, 0.54, 0.68, 0.62); // A6 (eco de reforço)
+            } else {
+                // Chamada clara e firme para pedidos OMNI padrão
+                playBellNote(783.99,  0.00, 0.45, 0.52); // G5
+                playBellNote(987.77,  0.12, 0.45, 0.56); // B5
+                playBellNote(1174.66, 0.24, 0.52, 0.60); // D6
+                playBellNote(1567.98, 0.37, 0.72, 0.64); // G6
+            }
         }
 
-        function playSirenBurst(chimeCount = 3) {
+        function playSirenBurst(chimeCount = 6, mode = 'NORMAL', forceRestart = false) {
             if (!audioCtx || audioCtx.state !== 'running') return;
-            if (isAlertSequenceActive) return;
+            if (isAlertSequenceActive) {
+                if (!forceRestart) return;
+                stopSirenBurst();
+            }
 
+            const normalizedMode = (mode === true) ? 'URGENT' : (mode === false ? 'NORMAL' : mode);
             isAlertSequenceActive = true;
-            const spacingMs = 3000; // Toques musicais espaçados (a cada 3s), nada de bipe contínuo
+            const spacingMs = normalizedMode === 'URGENT' ? 1650 : (normalizedMode === 'DISPATCH' ? 2100 : 1850);
 
             for (let i = 0; i < chimeCount; i++) {
                 const t = setTimeout(() => {
@@ -1623,7 +1801,7 @@
                         stopSirenBurst();
                         return;
                     }
-                    playSiren();
+                    playSiren(normalizedMode);
                 }, i * spacingMs);
                 alertSequenceTimers.push(t);
             }
@@ -3740,55 +3918,74 @@
             }
 
             if (isAudioReady) {
-                let hasBrandNewOrder = false;
+                let hasBrandNewPickingOrder = false;
+                let hasBrandNewDispatch = false;
                 for (const id of activeWaitingIds) {
                     if (!announcedOrderIds.has(id)) {
                         announcedOrderIds.add(id);
-                        hasBrandNewOrder = true;
+                        hasBrandNewPickingOrder = true;
                     }
                 }
 
                 const currentIfoodCount = isIfoodAlive ? ifoodPending : 0;
                 if (currentIfoodCount > lastIfoodAnnouncedCount) {
-                    hasBrandNewOrder = true;
+                    hasBrandNewPickingOrder = true;
                 }
                 lastIfoodAnnouncedCount = currentIfoodCount;
 
                 const currentRappiCount = isRappiAlive ? rappiPending : 0;
                 if (currentRappiCount > lastRappiAnnouncedCount) {
-                    hasBrandNewOrder = true;
+                    hasBrandNewPickingOrder = true;
                 }
                 lastRappiAnnouncedCount = currentRappiCount;
 
                 const current99Count = is99Alive ? n99Pending : 0;
                 if (current99Count > last99AnnouncedCount) {
-                    hasBrandNewOrder = true;
+                    hasBrandNewPickingOrder = true;
                 }
                 last99AnnouncedCount = current99Count;
 
                 if (counts.SEND_READY > lastDispatchAnnouncedCount) {
-                    hasBrandNewOrder = true;
+                    hasBrandNewDispatch = true;
                 }
                 lastDispatchAnnouncedCount = counts.SEND_READY;
 
                 const now = Date.now();
                 const hasDispatchAlert = counts.SEND_READY > 0;
                 const hasUnpickedOrders = (pedidosNovosWaiting.length > 0 || currentIfoodCount > 0 || currentRappiCount > 0 || current99Count > 0);
+                const hasUrgentPending = (
+                    currentIfoodCount > 0 ||
+                    currentRappiCount > 0 ||
+                    current99Count > 0 ||
+                    pedidosNovosWaiting.some(o => getOrderPriority(o).rank <= 3)
+                );
+                const activeReminderCooldown = hasUrgentPending ? URGENT_REMINDER_COOLDOWN : REMINDER_COOLDOWN;
 
                 // Se não há mais nenhuma pendência, silencia imediatamente qualquer aviso em andamento
                 if (!hasUnpickedOrders && !hasDispatchAlert) {
                     stopSirenBurst();
                 }
-                // 1. Novo Pedido (WAITING), Novo iFood/Rappi/99 ou Nova Lista de Despacho -> 3 toques musicais espaçados (~9s)
-                else if (hasBrandNewOrder) {
-                    if (now - lastAlarmPlayedTime > 3000) {
-                        playSirenBurst(3);
+                // 1a. Novo Pedido (WAITING / iFood / Rappi / 99) -> 6 toques ascendentes firmes (~10-11s)
+                else if (hasBrandNewPickingOrder) {
+                    if (now - lastAlarmPlayedTime > 2500) {
+                        playSirenBurst(6, hasUrgentPending ? 'URGENT' : 'NORMAL', true);
                         lastAlarmPlayedTime = now;
                     }
                 }
-                // 2. Qualquer pendência ativa -> 2 toques musicais espaçados a cada 60 segundos
-                else if (now - lastAlarmPlayedTime >= REMINDER_COOLDOWN) {
-                    playSirenBurst(2);
+                // 1b. Nova Lista de Despacho -> 5 toques exclusivos "Ding-Dong" descendente duplo (~10s)
+                else if (hasBrandNewDispatch) {
+                    if (now - lastAlarmPlayedTime > 2500) {
+                        playSirenBurst(5, 'DISPATCH', true);
+                        lastAlarmPlayedTime = now;
+                    }
+                }
+                // 2. Pendência ativa -> lembrete com o som correspondente ao tipo de pendência
+                else if (now - lastAlarmPlayedTime >= activeReminderCooldown) {
+                    if (hasUnpickedOrders) {
+                        playSirenBurst(hasUrgentPending ? 5 : 4, hasUrgentPending ? 'URGENT' : 'NORMAL', false);
+                    } else if (hasDispatchAlert) {
+                        playSirenBurst(4, 'DISPATCH', false);
+                    }
                     lastAlarmPlayedTime = now;
                 }
             }
