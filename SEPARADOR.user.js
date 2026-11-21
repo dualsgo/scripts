@@ -97,6 +97,45 @@
                 color: #25D366 !important;
                 text-decoration: underline !important;
             }
+
+            /* Foto ampliada e linha da tabela de produtos otimizada para conferência visual */
+            body.separador-pickup-active table.order-products-table-products:not(.table-rupture) tbody tr td {
+                vertical-align: middle !important;
+                padding-top: 10px !important;
+                padding-bottom: 10px !important;
+            }
+            body.separador-pickup-active table.order-products-table-products:not(.table-rupture) td.overlay-zoom {
+                width: 136px !important;
+                min-width: 136px !important;
+                padding: 8px !important;
+                text-align: center !important;
+            }
+            body.separador-pickup-active table.order-products-table-products:not(.table-rupture) td.overlay-zoom img {
+                width: 118px !important;
+                height: 118px !important;
+                max-width: 118px !important;
+                max-height: 118px !important;
+                object-fit: contain !important;
+                background: #ffffff !important;
+                border: 1px solid #d9d9d9 !important;
+                border-radius: 8px !important;
+                padding: 4px !important;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+                cursor: zoom-in !important;
+                transition: transform 0.18s ease, box-shadow 0.18s ease !important;
+            }
+            body.separador-pickup-active table.order-products-table-products:not(.table-rupture) td.overlay-zoom img:hover {
+                transform: scale(1.12);
+                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22) !important;
+                position: relative;
+                z-index: 20;
+            }
+            body.separador-pickup-active table.order-products-table-products:not(.table-rupture) td.order-products-column-details p {
+                font-size: 15px !important;
+                font-weight: 600 !important;
+                line-height: 1.35 !important;
+                margin-bottom: 0 !important;
+            }
         `;
         (document.head || document.documentElement).appendChild(style);
     }
@@ -926,7 +965,11 @@
     }
 
     function applySeparadorEnhancements() {
-        if (!isPickupOrderPage()) return;
+        const isPickup = isPickupOrderPage();
+        if (document.body) {
+            document.body.classList.toggle('separador-pickup-active', isPickup);
+        }
+        if (!isPickup) return;
 
         hideConfirmPickupButton();
         injectWhatsAppControls();
