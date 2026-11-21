@@ -136,6 +136,32 @@
                 line-height: 1.35 !important;
                 margin-bottom: 0 !important;
             }
+
+            /* Botão de Inventário Térmico na Lista de Retirada */
+            .btn-separador-inventario {
+                background-color: #111827 !important;
+                border-color: #111827 !important;
+                color: #ffffff !important;
+                font-weight: 700 !important;
+                font-size: 13px !important;
+                padding: 7px 14px !important;
+                margin-left: 14px !important;
+                vertical-align: middle !important;
+                display: inline-flex !important;
+                align-items: center !important;
+                gap: 7px !important;
+                border-radius: 5px !important;
+                transition: background-color 0.15s ease, transform 0.1s ease !important;
+            }
+            .btn-separador-inventario:hover,
+            .btn-separador-inventario:focus {
+                background-color: #2563eb !important;
+                border-color: #1d4ed8 !important;
+                color: #ffffff !important;
+            }
+            .btn-separador-inventario:active {
+                transform: scale(0.98);
+            }
         `;
         (document.head || document.documentElement).appendChild(style);
     }
@@ -248,6 +274,20 @@
         return false;
     }
 
+    // Verifica se o pedido já está no status AGUARDANDO RETIRADA (PICKUP_READY), e não em separação/pendente
+    function isPickupReadyOrderPage() {
+        if (!isOrderFulfillmentRoute()) return false;
+        if (document.querySelector('.fulfillment-status-pickup_ready')) return true;
+        if (document.querySelector('span.order-status.pickup_ready')) return true;
+        if (document.querySelector('button.btn-delivered-pickup')) return true;
+
+        const statusBadge = document.querySelector('.fulfillment-details-title .order-status');
+        if (statusBadge && statusBadge.textContent && statusBadge.textContent.toLowerCase().includes('aguardando retirada')) {
+            return true;
+        }
+        return false;
+    }
+
     function toTitleCase(str) {
         return String(str || '')
             .trim()
@@ -280,6 +320,8 @@
         let customerCpf = '';
         let pickupDeadline = '';
         let purchaseDate = '';
+        let deliveryType = '';
+        let deadline = '';
 
         // Varre todos os pares <dt>/<dd> do resumo do pedido
         const dlElements = document.querySelectorAll('.table-details dl');
@@ -299,8 +341,12 @@
                     customerCpf = val;
                 } else if (label.includes('prazo de retirada') && val) {
                     pickupDeadline = val;
+                } else if (label === 'prazo:' && val) {
+                    deadline = val;
                 } else if (label.startsWith('compra:') && val) {
                     purchaseDate = val;
+                } else if (label.startsWith('tipo:') && !deliveryType && val) {
+                    deliveryType = val;
                 }
             }
         });
@@ -344,28 +390,49 @@
             const titleNode = tr.querySelector('.order-products-column-details p');
             const title = titleNode ? titleNode.textContent.trim() : '';
 
+            const imgNode = tr.querySelector('td.overlay-zoom img, img');
+            const imageUrl = imgNode ? (imgNode.getAttribute('src') || imgNode.getAttribute('ng-src') || '') : '';
+
             const qtyNode = tr.querySelector('.order-products-column-quantity');
-            let qty = '1';
+            let qty = '';
             if (qtyNode) {
                 const rawQty = qtyNode.textContent.trim();
-                // Formato "1/1" -> pega quantidade do pedido (ou conferida)
                 const parts = rawQty.split('/');
                 qty = (parts[1] || parts[0] || '1').replace(/\D/g, '') || '1';
             }
 
             let sku = '';
             let ean = '';
+            let isGift = false;
+            const fractionCells = [];
             for (let i = 3; i < cols.length; i++) {
-                const txt = cols[i].textContent.trim();
+                const td = cols[i];
+                const txt = td.textContent.trim();
                 if (!sku && /^\d{5,9}$/.test(txt)) {
                     sku = txt;
                 } else if (!ean && /^\d{10,14}$/.test(txt)) {
                     ean = txt;
+                } else if (/^\d+\s*\/\s*\d+$/.test(txt)) {
+                    fractionCells.push({ td, txt });
                 }
             }
 
+            if (!qty && fractionCells.length > 0) {
+                const parts = fractionCells[0].txt.split('/');
+                qty = (parts[1] || parts[0] || '1').replace(/\D/g, '') || '1';
+            }
+            if (!qty) qty = '1';
+
+            // Verifica coluna de presente (ex: "1/1" ou ícone glyphicon-gift visível)
+            const giftCell = tr.querySelector('td[ng-show*="showGiftCollumn"]');
+            if (giftCell) {
+                const gTxt = giftCell.textContent.trim();
+                const gParts = gTxt.split('/');
+                if (parseInt(gParts[0], 10) > 0) isGift = true;
+            }
+
             if (title) {
-                items.push({ title, qty, sku: sku || ean || '-', ean });
+                items.push({ title, qty, sku: sku || ean || '-', ean: ean || '-', imageUrl, isGift });
             }
         });
 
@@ -388,6 +455,8 @@
             customerPhoneRaw,
             cleanPhone,
             pickupDeadline,
+            deadline,
+            deliveryType,
             purchaseDate,
             storeLabel,
             items,
@@ -495,15 +564,36 @@
         doc.write(htmlDoc);
         doc.close();
 
-        // Imprime após renderização garantida (SVG vetorial já está pronto na hora, sem depender de fontes externas)
-        setTimeout(() => {
-            try {
-                iframe.contentWindow.focus();
-                iframe.contentWindow.print();
-            } catch (e) {
-                console.error('[SEPARADOR] Erro ao acionar impressão térmica:', e);
-            }
-        }, 250);
+        // Aguarda todas as imagens (ex: fotos dos produtos) carregarem antes de disparar o print
+        const triggerPrint = () => {
+            if (iframe._printed) return;
+            iframe._printed = true;
+            setTimeout(() => {
+                try {
+                    iframe.contentWindow.focus();
+                    iframe.contentWindow.print();
+                } catch (e) {
+                    console.error('[SEPARADOR] Erro ao acionar impressão térmica:', e);
+                }
+            }, 180);
+        };
+
+        const imgs = Array.from(doc.querySelectorAll('img'));
+        if (imgs.length === 0) {
+            triggerPrint();
+        } else {
+            const imgPromises = imgs.map(img => {
+                if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+                return new Promise(resolve => {
+                    img.addEventListener('load', resolve, { once: true });
+                    img.addEventListener('error', resolve, { once: true });
+                });
+            });
+            Promise.race([
+                Promise.all(imgPromises),
+                new Promise(resolve => setTimeout(resolve, 2500))
+            ]).then(triggerPrint);
+        }
     }
 
     // 5A. DECLARAÇÃO DE ENTREGA (Cabeçalho Cupom 10% OFF + Assinaturas + Código de Barras do CPF)
@@ -914,6 +1004,259 @@
         printThermalHtml(html);
     }
 
+    // 5C. RELATÓRIO DE SEPARAÇÃO TÉRMICO COM FOTO EM PRETO E BRANCO (EPSON TM-T20X)
+    function printRelatorioSeparacao() {
+        const data = extractOrderData();
+        if (!data.orderNumber) {
+            alert('Aguarde os dados do pedido terminarem de carregar antes de imprimir.');
+            return;
+        }
+
+        const barcodeOrderValue = CONFIG.STRIP_FULFILLMENT_SUFFIX
+            ? data.orderNumber.replace(/-\d+$/, '')
+            : data.orderNumber;
+
+        const orderBarcodeSvg = generateCode128BSvg(barcodeOrderValue, { height: 54, quietZone: 10 });
+        const totalUnits = data.items.reduce((sum, it) => sum + (parseInt(it.qty, 10) || 1), 0) || 1;
+        const nowStr = new Date().toLocaleString('pt-BR', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+
+        const itemsHtml = data.items.length === 0
+            ? '<div style="text-align:center;padding:12px;font-weight:700;">Nenhum item listado</div>'
+            : data.items.map((it, idx) => {
+                const qtyNum = parseInt(it.qty, 10) || 1;
+                const isMultiQty = qtyNum > 1;
+                return `
+                    <div class="pick-item">
+                        <div class="pick-item-top">
+                            <div class="pick-photo-wrap">
+                                ${it.imageUrl
+                                    ? `<img src="${escapeHtml(it.imageUrl)}" class="pick-photo" alt="" />`
+                                    : `<div class="pick-photo-empty">SEM<br>FOTO</div>`
+                                }
+                            </div>
+                            <div class="pick-meta">
+                                <div class="pick-qty-row">
+                                    <span class="pick-idx">#${idx + 1}</span>
+                                    <span class="pick-qty ${isMultiQty ? 'pick-qty-alert' : ''}">QTD: ${qtyNum}</span>
+                                    ${it.isGift ? '<span class="pick-gift">PRESENTE</span>' : ''}
+                                </div>
+                                <div class="pick-code"><strong>SKU:</strong> ${escapeHtml(it.sku)}</div>
+                                <div class="pick-code"><strong>EAN:</strong> ${escapeHtml(it.ean)}</div>
+                            </div>
+                        </div>
+                        <div class="pick-name">${escapeHtml(it.title)}</div>
+                    </div>
+                `;
+            }).join('');
+
+        const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Relatório de Separação - ${escapeHtml(data.orderNumber)}</title>
+    <style>
+        @page {
+            size: 80mm auto;
+            margin: 0;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            color: #000000;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            line-height: 1.25;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        .sheet {
+            width: 302px;
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 10px 8px 18px 8px;
+        }
+        .pick-banner {
+            background: #000000;
+            color: #ffffff;
+            text-align: center;
+            font-size: 14px;
+            font-weight: 900;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 6px 4px;
+            margin-bottom: 5px;
+        }
+        .pick-store {
+            text-align: center;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .pick-order-box {
+            text-align: center;
+            border-top: 1.5px solid #000000;
+            border-bottom: 1.5px solid #000000;
+            padding: 6px 2px 8px 2px;
+            margin-bottom: 6px;
+        }
+        .pick-order-num {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 18px;
+            font-weight: 900;
+            margin-bottom: 5px;
+            word-break: break-all;
+        }
+        .pick-barcode-svg {
+            width: 94%;
+            margin: 0 auto;
+        }
+        .pick-header-info {
+            font-size: 11px;
+            border-bottom: 2px solid #000000;
+            padding-bottom: 6px;
+            margin-bottom: 8px;
+        }
+        .pick-header-info div {
+            margin-bottom: 2px;
+        }
+        .pick-item {
+            border-bottom: 1.5px dashed #000000;
+            padding: 8px 0 9px 0;
+            page-break-inside: avoid;
+        }
+        .pick-item-top {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .pick-photo-wrap {
+            width: 104px;
+            height: 104px;
+            border: 1.5px solid #000000;
+            background: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            padding: 2px;
+            overflow: hidden;
+        }
+        /* Filtro otimizado para impressão térmica P&B (203 DPI): remove cinzas sujos e realça contornos */
+        .pick-photo {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            filter: grayscale(100%) contrast(165%) brightness(108%);
+            -webkit-filter: grayscale(100%) contrast(165%) brightness(108%);
+        }
+        .pick-photo-empty {
+            font-size: 10px;
+            font-weight: 800;
+            text-align: center;
+        }
+        .pick-meta {
+            flex: 1;
+            min-width: 0;
+        }
+        .pick-qty-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 6px;
+        }
+        .pick-idx {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            font-weight: 900;
+        }
+        .pick-qty {
+            font-size: 15px;
+            font-weight: 900;
+            border: 2px solid #000000;
+            padding: 1px 6px;
+        }
+        .pick-qty-alert {
+            background: #000000;
+            color: #ffffff;
+        }
+        .pick-gift {
+            font-size: 10px;
+            font-weight: 900;
+            background: #000000;
+            color: #ffffff;
+            padding: 2px 5px;
+        }
+        .pick-code {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 11.5px;
+            font-weight: 700;
+            margin-bottom: 3px;
+            word-break: break-all;
+        }
+        .pick-check-line {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 6px;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+        .pick-box {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #000000;
+        }
+        .pick-name {
+            font-size: 12px;
+            font-weight: 800;
+            line-height: 1.25;
+            text-transform: uppercase;
+        }
+        .pick-footer {
+            margin-top: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            page-break-inside: avoid;
+        }
+        .pick-footer div {
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="sheet">
+        <div class="pick-banner">RELATÓRIO DE SEPARAÇÃO</div>
+        <div class="pick-store">${escapeHtml(data.storeLabel)}</div>
+
+        <div class="pick-order-box">
+            <div class="pick-order-num">${escapeHtml(data.orderNumber)}</div>
+            <div class="pick-barcode-svg">${orderBarcodeSvg}</div>
+        </div>
+
+        <div class="pick-header-info">
+            <div><strong>Tipo:</strong> ${escapeHtml(data.deliveryType || 'Pedido OMS')}</div>
+            <div><strong>Cliente:</strong> ${escapeHtml(data.customerName || 'Não informado')}</div>
+            ${data.deadline ? `<div><strong>Prazo:</strong> ${escapeHtml(data.deadline)}</div>` : ''}
+            <div><strong>Itens:</strong> ${data.items.length} &nbsp;|&nbsp; <strong>Unidades:</strong> ${totalUnits} &nbsp;|&nbsp; <strong>Impresso:</strong> ${escapeHtml(nowStr)}</div>
+        </div>
+
+        ${itemsHtml}
+    </div>
+</body>
+</html>`;
+
+        printThermalHtml(html);
+    }
+
     // =========================================================================
     // 6. INTERCEPTAÇÃO DOS ITENS DE IMPRESSÃO NO DROPDOWN "OUTRAS AÇÕES"
     // =========================================================================
@@ -922,9 +1265,24 @@
         if (dropdownParent) dropdownParent.classList.remove('open');
     }
 
-    function hookDropdownPrintActions() {
+    function hookDropdownPrintActions(isPickupOrder) {
         const menu = document.getElementById('buttons-other-actions-content');
         if (!menu) return;
+
+        // 0. Relatório de separação (com foto P&B otimizada para Epson TM-T20X — funciona em qualquer pedido)
+        const pickingLink = menu.querySelector('a[ng-click*="printFulfillmentsTag"]');
+        if (pickingLink && pickingLink.getAttribute('data-separador-hooked') !== 'true') {
+            pickingLink.setAttribute('data-separador-hooked', 'true');
+            pickingLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                e.stopPropagation();
+                closeOtherActionsDropdown();
+                printRelatorioSeparacao();
+            }, true);
+        }
+
+        if (!isPickupOrder) return;
 
         // 1. Etiqueta de retirada
         const tagLink = menu.querySelector('a[ng-click*="printPickupTagFulfillment"]');
@@ -954,6 +1312,322 @@
     }
 
     // =========================================================================
+    // 6B. INVENTÁRIO FÍSICO DA ÁREA DE RETIRADA (TELA /fulfillments/pickup)
+    // =========================================================================
+    function isPickupListPage() {
+        return /\/fulfillments\/pickup/i.test(window.location.pathname) || !!document.querySelector('table.pickup-fulfillments');
+    }
+
+    function extractPickupInventoryData() {
+        let storeLabel = 'RI HAPPY';
+        const storeBtn = document.querySelector('.dropdown.location .txt, .location .txt, header button[title*="LOJA" i], header .store-name');
+        if (storeBtn && storeBtn.textContent.trim()) {
+            const rawStore = storeBtn.textContent.trim().replace(/\s+/g, ' ');
+            storeLabel = rawStore.toUpperCase().includes('RI HAPPY') || rawStore.toUpperCase().includes('PB KIDS')
+                ? rawStore.toUpperCase()
+                : `RI HAPPY - ${rawStore.toUpperCase()}`;
+        }
+
+        const qtyBadge = document.querySelector('.fulfillment-pickup-ready .fulfillment-qty, h1 .fulfillment-qty');
+        const totalExpected = qtyBadge ? (parseInt(qtyBadge.textContent.replace(/\D/g, ''), 10) || 0) : 0;
+
+        const orders = [];
+        const rows = document.querySelectorAll('table.pickup-fulfillments > tbody > tr');
+        rows.forEach((tr) => {
+            const orderIdEl = tr.querySelector('.table-order-id > span.ng-binding');
+            const orderId = orderIdEl ? orderIdEl.textContent.trim() : '';
+            if (!orderId) return;
+
+            const updatedAtEl = tr.querySelector('.updated-at');
+            const readyDate = updatedAtEl ? updatedAtEl.textContent.trim() : '';
+
+            const summaryEl = tr.querySelector('.table-order-description-1');
+            const summary = summaryEl ? summaryEl.textContent.trim() : '';
+
+            // Todos os itens já existem no DOM dentro de .order-product-list mesmo com ng-hide
+            const items = [];
+            const itemBodies = tr.querySelectorAll('.order-product-list table tbody');
+            itemBodies.forEach((tbody) => {
+                const firstRow = tbody.querySelector('tr');
+                if (!firstRow) return;
+                const tds = firstRow.querySelectorAll('td');
+                if (tds.length < 2) return;
+
+                // Extrai somente o texto do produto sem tags aninhadas
+                const nameClone = tds[0].cloneNode(true);
+                nameClone.querySelectorAll('ul').forEach(u => u.remove());
+                const name = nameClone.textContent.trim().replace(/\s+/g, ' ');
+                const qty = parseInt(tds[1].textContent.trim(), 10) || 1;
+                const unitPrice = tds[2] ? tds[2].textContent.trim() : '';
+
+                if (name) {
+                    items.push({ name, qty, unitPrice });
+                }
+            });
+
+            orders.push({
+                orderId,
+                readyDate,
+                summary,
+                items
+            });
+        });
+
+        return {
+            storeLabel,
+            totalExpected: totalExpected || orders.length,
+            orders
+        };
+    }
+
+    function printInventarioRetirada() {
+        const inv = extractPickupInventoryData();
+        if (inv.orders.length === 0) {
+            alert('Nenhum pedido carregado na Lista de Retirada ainda. Aguarde a tabela carregar.');
+            return;
+        }
+
+        if (inv.totalExpected > inv.orders.length) {
+            const proceed = confirm(
+                `A lista carregou ${inv.orders.length} de ${inv.totalExpected} pedidos.\n\n` +
+                `Se quiser incluir todos, clique em Cancelar e role até o final da tabela primeiro.\n` +
+                `Clique em OK para imprimir o inventário dos ${inv.orders.length} pedidos carregados agora.`
+            );
+            if (!proceed) return;
+        }
+
+        const totalUnits = inv.orders.reduce((acc, ord) => {
+            return acc + ord.items.reduce((s, it) => s + (it.qty || 1), 0);
+        }, 0);
+
+        const nowStr = new Date().toLocaleString('pt-BR', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+
+        const ordersHtml = inv.orders.map((ord, idx) => {
+            const num = String(idx + 1).padStart(2, '0');
+            const shortReady = ord.readyDate ? ord.readyDate.replace(/\/20(\d\d)/, '/$1') : '';
+            const itemsHtml = ord.items.length === 0
+                ? `<div class="inv-item"><span class="inv-box"></span><span>(Sem itens listados)</span></div>`
+                : ord.items.map(it => `
+                    <div class="inv-item">
+                        <span class="inv-box"></span>
+                        <span class="inv-qty">${it.qty}x</span>
+                        <span class="inv-name">${escapeHtml(it.name)}</span>
+                    </div>
+                `).join('');
+
+            return `
+                <div class="inv-order">
+                    <div class="inv-order-head">
+                        <span class="inv-box-lg"></span>
+                        <span class="inv-idx">#${num}</span>
+                        <span class="inv-id">${escapeHtml(ord.orderId)}</span>
+                    </div>
+                    <div class="inv-order-meta">
+                        <span>${escapeHtml(ord.summary)}</span>
+                        ${shortReady ? `<span>Pronto: ${escapeHtml(shortReady)}</span>` : ''}
+                    </div>
+                    <div class="inv-items">
+                        ${itemsHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Inventário Retirada - ${escapeHtml(nowStr)}</title>
+    <style>
+        @page {
+            size: 80mm auto;
+            margin: 0;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            color: #000000;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            line-height: 1.25;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        .sheet {
+            width: 302px;
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 10px 8px 18px 8px;
+        }
+        .inv-banner {
+            background: #000000;
+            color: #ffffff;
+            text-align: center;
+            font-size: 14px;
+            font-weight: 900;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            padding: 6px 4px;
+            margin-bottom: 6px;
+        }
+        .inv-store {
+            text-align: center;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .inv-head-meta {
+            font-size: 11px;
+            border-top: 1.5px solid #000;
+            border-bottom: 1.5px solid #000;
+            padding: 5px 2px;
+            margin-bottom: 8px;
+        }
+        .inv-head-meta div {
+            margin-bottom: 2px;
+        }
+        .inv-order {
+            border-bottom: 1.5px dashed #000000;
+            padding: 7px 0 8px 0;
+            page-break-inside: avoid;
+        }
+        .inv-order-head {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 900;
+            font-size: 13px;
+            margin-bottom: 2px;
+        }
+        .inv-box-lg {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #000000;
+            flex-shrink: 0;
+        }
+        .inv-idx {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+        }
+        .inv-id {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            letter-spacing: -0.3px;
+        }
+        .inv-order-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 9.5px;
+            font-weight: 700;
+            padding-left: 19px;
+            margin-bottom: 5px;
+        }
+        .inv-items {
+            padding-left: 12px;
+        }
+        .inv-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 5px;
+            font-size: 10.5px;
+            margin-bottom: 4px;
+        }
+        .inv-box {
+            display: inline-block;
+            width: 11px;
+            height: 11px;
+            border: 1.5px solid #000000;
+            margin-top: 1px;
+            flex-shrink: 0;
+        }
+        .inv-qty {
+            font-weight: 900;
+            flex-shrink: 0;
+        }
+        .inv-name {
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        .inv-footer {
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 2px solid #000000;
+            font-size: 11px;
+            font-weight: 700;
+            page-break-inside: avoid;
+        }
+        .inv-footer-row {
+            margin-bottom: 8px;
+        }
+        .inv-obs-line {
+            border-bottom: 1px solid #000000;
+            height: 18px;
+            margin-bottom: 6px;
+        }
+        .inv-sig {
+            margin-top: 26px;
+            border-top: 1px solid #000000;
+            text-align: center;
+            padding-top: 4px;
+            font-size: 11px;
+            font-weight: 800;
+        }
+    </style>
+</head>
+<body>
+    <div class="sheet">
+        <div class="inv-banner">INVENTÁRIO • ÁREA DE RETIRADA</div>
+        <div class="inv-store">${escapeHtml(inv.storeLabel)}</div>
+
+        <div class="inv-head-meta">
+            <div><strong>Emitido em:</strong> ${escapeHtml(nowStr)}</div>
+            <div><strong>Pedidos:</strong> ${inv.orders.length} (de ${inv.totalExpected}) &nbsp;|&nbsp; <strong>Unidades:</strong> ${totalUnits}</div>
+            <div style="margin-top:5px;"><strong>Conferente:</strong> _______________________</div>
+        </div>
+
+        ${ordersHtml}
+
+        <div class="inv-footer">
+            <div class="inv-footer-row">Pedidos OK: ______ / ${inv.orders.length}</div>
+            <div class="inv-footer-row">Divergências / Faltas: ______</div>
+            <div>Observações:</div>
+            <div class="inv-obs-line"></div>
+            <div class="inv-obs-line"></div>
+            <div class="inv-sig">Assinatura do Responsável</div>
+        </div>
+    </div>
+</body>
+</html>`;
+
+        printThermalHtml(html);
+    }
+
+    function injectInventoryButton() {
+        const heading = document.querySelector('.fulfillment-pickup-ready .page-header h1, .fulfillment-pickup-ready h1');
+        if (!heading || document.getElementById('separador-btn-inventario')) return;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'separador-btn-inventario';
+        btn.className = 'btn btn-separador-inventario';
+        btn.title = 'Imprimir checklist de inventário físico dos pedidos de retirada na impressora térmica Epson';
+        btn.innerHTML = `<span class="glyphicon glyphicon-print" aria-hidden="true"></span><span>Imprimir Inventário</span>`;
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            printInventarioRetirada();
+        });
+
+        heading.appendChild(btn);
+    }
+
+    // =========================================================================
     // 7. ORQUESTRADOR SPA (MutationObserver COM DEBOUNCE)
     // =========================================================================
     function hideConfirmPickupButton() {
@@ -964,16 +1638,36 @@
         });
     }
 
-    function applySeparadorEnhancements() {
-        const isPickup = isPickupOrderPage();
-        if (document.body) {
-            document.body.classList.toggle('separador-pickup-active', isPickup);
-        }
-        if (!isPickup) return;
+    function removeWhatsAppButtonIfPresent() {
+        const existingBtn = document.getElementById('separador-btn-whatsapp');
+        if (existingBtn) existingBtn.remove();
+    }
 
-        hideConfirmPickupButton();
-        injectWhatsAppControls();
-        hookDropdownPrintActions();
+    function applySeparadorEnhancements() {
+        const isOrderDetail = isOrderFulfillmentRoute();
+        const isPickupDetail = isPickupOrderPage();
+        const isPickupReady = isPickupReadyOrderPage();
+        const isPickupList = isPickupListPage();
+
+        if (document.body) {
+            document.body.classList.toggle('separador-pickup-active', isPickupDetail);
+        }
+
+        if (isOrderDetail) {
+            hookDropdownPrintActions(isPickupDetail);
+            if (isPickupDetail) {
+                hideConfirmPickupButton();
+            }
+            // Botão WhatsApp aparece SOMENTE quando o pedido já está AGUARDANDO RETIRADA (PICKUP_READY)
+            if (isPickupReady) {
+                injectWhatsAppControls();
+            } else {
+                removeWhatsAppButtonIfPresent();
+            }
+        } else if (isPickupList) {
+            removeWhatsAppButtonIfPresent();
+            injectInventoryButton();
+        }
     }
 
     let debounceTimer = null;
@@ -986,7 +1680,7 @@
         injectGlobalStyles();
 
         const observer = new MutationObserver(() => {
-            if (isOrderFulfillmentRoute()) {
+            if (isOrderFulfillmentRoute() || isPickupListPage()) {
                 scheduleApply();
             }
         });
